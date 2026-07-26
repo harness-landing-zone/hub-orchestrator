@@ -1,0 +1,12 @@
+environment:
+  name: Hub
+  identifier: hub
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  description: >-
+    The permanent bootstrap-0 cluster. Production type deliberately — this is
+    not a demo environment, and marking it so keeps demo pipelines from
+    treating it as a convenient target.
+  type: Production
+  tags:
+    tier: bootstrap-0

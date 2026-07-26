@@ -1,0 +1,61 @@
+{{- /* Root ApplicationSet: a clusters generator over hub-labeled cluster
+Secrets (the hubCluster Secret above) stamps ONE root Application per hub,
+syncing a flat folder of ApplicationSets to that hub BY NAME. The generated
+Application pins an EXPLICIT directory source, so CMP discovery never
+go-templates the ApplicationSet placeholders it syncs. Applied as a
+post-install/post-upgrade hook (weight 1, AFTER the AppProject at 0) and
+gated on the runtime phase switch: hook manifests are built at fire time,
+which is what lets this CR ship in the SAME release as the Argo CRDs.
+before-hook-creation recreates it on every upgrade - and absorbs a
+hand-applied copy of the same name regardless of helm ownership; with
+preserveResourcesOnDeletion the recreate is a metadata blip (generated
+Applications are re-stamped, their children keep running). Argo runtime
+placeholders are backtick-escaped so they reach the appset controller
+literally. */}}
+{{- $as := (.Values).rootAppSet }}
+{{- if and $as $as.enabled .Values.gitopsAgent.enabled }}
+{{- $repoURL := default ((.Values.harnessAgent).gitSecret).url $as.repoURL }}
+{{- if not $repoURL }}
+{{- fail "rootAppSet.repoURL is required when harnessAgent.gitSecret.url is not set" }}
+{{- end }}
+{{- if not $as.selector }}
+{{- fail "rootAppSet.selector must not be empty - an empty clusters selector matches EVERY registered cluster, spokes included" }}
+{{- end }}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ default "cluster-application-sets" $as.name | quote }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+  labels:
+    {{- include "harness-gitops-agent-bootstrap.labels" . | nindent 4 }}
+spec:
+  goTemplate: true
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            {{- toYaml $as.selector | nindent 12 }}
+  template:
+    metadata:
+      name: {{ default "cluster-application-sets" $as.name | quote }}
+    spec:
+      project: {{ default "default" $as.project | quote }}
+      source:
+        repoURL: {{ $repoURL | quote }}
+        path: {{ default "gitops/bootstrap" $as.path | quote }}
+        targetRevision: {{ default "HEAD" $as.targetRevision | quote }}
+        directory:
+          recurse: false
+          exclude: exclude/*
+      destination:
+        namespace: {{ .Release.Namespace | quote }}
+        name: '{{`{{.name}}`}}'
+      syncPolicy:
+        automated: {}
+{{- end }}

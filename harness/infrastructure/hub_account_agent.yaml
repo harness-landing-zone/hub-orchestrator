@@ -1,0 +1,16 @@
+infrastructureDefinition:
+  name: hub-account-agent
+  identifier: hub_account_agent
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  environmentRef: hub
+  deploymentType: NativeHelm
+  type: KubernetesDirect
+  spec:
+    connectorRef: hub_bootstrap0
+    # One namespace per agent instance. The AppProject and the repository
+    # Secret both default to the release namespace, so this is also where the
+    # agent's Argo objects land.
+    namespace: hub-account-agent
+    releaseName: release-<+INFRA_KEY_SHORT_ID>
+  allowSimultaneousDeployments: false

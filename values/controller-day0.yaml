@@ -1,0 +1,56 @@
+# Day-0 controller values for the permanent bootstrap-0 hub.
+# Consumed by service hub_controller in harness_controllers/hub_orchistrator.
+# Written for controller chart 0.5.0 (image v0.3.0).
+#
+# Harness resolves expressions in this file before Helm renders the chart. Keep
+# Harness expression syntax out of comments — fetched values-file comments are
+# evaluated too.
+
+image:
+  repository: <+artifacts.primary.imagePath>
+  tag: <+artifacts.primary.tag>
+
+# 0.5.0 templates the CRD instead of shipping it in crds/. That matters: Helm
+# NEVER upgrades anything in a crds/ directory, so on 0.4.0 a CRD schema change
+# meant a manual kubectl apply on every cluster forever. Here it ships with the
+# chart. keep:true annotates it so a helm uninstall leaves existing agent CRs
+# intact rather than cascading their deletion.
+crds:
+  enabled: true
+  keep: true
+
+manager:
+  # Empty on purpose. The controller then looks for the API-key Secret in each
+  # agent CR's own namespace, which is exactly where the bootstrap chart creates
+  # it (harnessAgent.apiKeySecret.create in account-agent-day0.yaml).
+  #
+  # 0.5.0 dropped the apikey-secret template that 0.4.0 had, so this chart no
+  # longer creates the Secret at all — setting this to hga-system would point
+  # the controller at a namespace where nothing writes one.
+  #
+  # HARDENING, later: centralising the credential in hga-system is better than
+  # a copy per agent namespace, since this key can create agents account-wide.
+  # That needs something to create the Secret there — an Apply step in the
+  # pipeline, or a small chart of its own. Worth doing once there is more than
+  # one agent on this cluster.
+  apiKeySecretNamespace: ""
+
+  # JSON logs rather than controller-runtime's development mode.
+  zapDevelopment: false
+
+  # Metrics ON from day zero. The chart exposes the container port only when
+  # bindAddress is not "0", so leaving the default would mean a controller
+  # restart later purely to make it scrapeable.
+  #
+  # secure:false serves plain HTTP on 8080 and skips controller-runtime's
+  # authn/authz filter, which would otherwise need certificates wired through
+  # metrics-cert-path. Anything in the cluster can read these metrics — an
+  # acceptable trade inside a private cluster, and the reason this is not a
+  # pattern to copy onto a shared one.
+  #
+  # The chart ships no Service and no ServiceMonitor, so scrape with a
+  # PodMonitor, which selects pods directly and needs neither.
+  metrics:
+    bindAddress: ":8080"
+    port: 8080
+    secure: false

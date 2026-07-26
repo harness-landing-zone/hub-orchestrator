@@ -1,0 +1,256 @@
+pipeline:
+  name: Hub Bootstrap CD
+  identifier: hub_bootstrap_cd
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  description: >-
+    Day-0 install of the HGA controller and the ACCOUNT-scoped GitOps Agent on a
+    permanent bootstrap cluster. Everything beyond this agent is bootstrapped
+    through GitOps.
+
+    Deliberately cluster-agnostic: the environment and infrastructure are runtime
+    inputs, so bootstrapping a second permanent cluster is selecting a different
+    Infrastructure rather than cloning this pipeline. That indirection is the
+    difference between a platform pipeline and a demo one.
+  tags:
+    purpose: platform-cd
+    tier: bootstrap-0
+  variables:
+    - name: chart_ref
+      type: String
+      description: >-
+        Git commit SHA (40 hex) or semantic tag vX.Y.Z in the hga-bootstrap
+        chart repo. Drives both chart fetches so controller and agent always
+        come from one tree.
+      required: true
+      value: <+input>
+    - name: image_tag
+      type: String
+      description: >-
+        Published controller image tag on Docker Hub — a commit SHA from main CI
+        or a promoted semantic tag. Decoupled from chart_ref because chart and
+        image do not publish from the same merge.
+      required: true
+      value: <+input>
+    - name: deploy_agent
+      type: String
+      description: Set false to install only the controller — useful when recovering a cluster whose agent is already registered.
+      required: true
+      value: <+input>.default(true).allowedValues(true,false)
+
+  stages:
+    - stage:
+        name: Deploy Controller
+        identifier: deploy_controller
+        description: Install or upgrade the HGA controller in hga-system. Also installs the HarnessGitopsAgent CRD and creates the platform-owned API-key Secret the controller reads for every agent.
+        type: Deployment
+        spec:
+          deploymentType: NativeHelm
+          service:
+            serviceRef: hub_controller
+            serviceInputs:
+              serviceDefinition:
+                type: NativeHelm
+                spec:
+                  manifests:
+                    - manifest:
+                        identifier: controller_chart
+                        type: HelmChart
+                        spec:
+                          store:
+                            type: Github
+                            spec:
+                              commitId: <+pipeline.variables.chart_ref>
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: controller_image
+                      sources:
+                        - identifier: controller_image
+                          type: DockerRegistry
+                          spec:
+                            tag: <+pipeline.variables.image_tag>
+          environment:
+            environmentRef: <+input>
+            deployToAll: false
+            infrastructureDefinitions: <+input>
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Validate Refs
+                  identifier: validate_refs
+                  description: Fail fast on a malformed ref rather than after a five-minute helm timeout.
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |-
+                          set -euo pipefail
+                          printf '%s\n' "$CHART_REF" | grep -Eq \
+                            '^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?|[0-9a-f]{40})$'
+                          printf '%s\n' "$IMAGE_TAG" | grep -Eq \
+                            '^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?|[0-9a-f]{40})$'
+                    environmentVariables:
+                      - name: CHART_REF
+                        type: String
+                        value: <+pipeline.variables.chart_ref>
+                      - name: IMAGE_TAG
+                        type: String
+                        value: <+pipeline.variables.image_tag>
+                    outputVariables: []
+                  timeout: 2m
+              - step:
+                  type: HelmDeploy
+                  name: Deploy Controller with Helm
+                  identifier: deploy_controller_with_helm
+                  spec:
+                    skipDryRun: false
+                    skipSteadyStateCheck: false
+                    useUpgradeInstall: true
+                    commandFlags:
+                      - commandType: Install
+                        flag: --create-namespace --wait --timeout 5m
+                      - commandType: Upgrade
+                        flag: --create-namespace --wait --timeout 5m
+                  timeout: 10m
+            rollbackSteps:
+              - step:
+                  type: HelmRollback
+                  name: Roll Back Controller
+                  identifier: rollback_controller
+                  spec: {}
+                  timeout: 10m
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+
+    - stage:
+        name: Deploy Account Agent
+        identifier: deploy_account_agent
+        description: >-
+          Install or upgrade the day-0 ACCOUNT-scoped agent. The bootstrap chart
+          creates the HarnessGitopsAgent CR, the controller registers it with
+          Harness and writes the token Secret, and the gitops-helm runtime
+          consumes that Secret.
+        type: Deployment
+        when:
+          pipelineStatus: Success
+          condition: <+pipeline.variables.deploy_agent> == "true"
+        spec:
+          deploymentType: NativeHelm
+          service:
+            serviceRef: hub_account_agent
+            serviceInputs:
+              serviceDefinition:
+                type: NativeHelm
+                spec:
+                  manifests:
+                    - manifest:
+                        identifier: agent_bootstrap_chart
+                        type: HelmChart
+                        spec:
+                          store:
+                            type: Github
+                            spec:
+                              commitId: <+pipeline.variables.chart_ref>
+          environment:
+            environmentRef: <+input>
+            deployToAll: false
+            infrastructureDefinitions: <+input>
+          execution:
+            steps:
+              - step:
+                  type: HelmDeploy
+                  name: Deploy Agent with Helm
+                  identifier: deploy_agent_with_helm
+                  spec:
+                    skipDryRun: false
+                    skipSteadyStateCheck: false
+                    useUpgradeInstall: true
+                    commandFlags:
+                      - commandType: Install
+                        flag: --create-namespace --wait --timeout 10m
+                      - commandType: Upgrade
+                        flag: --create-namespace --wait --timeout 10m
+                  timeout: 15m
+              - step:
+                  type: ShellScript
+                  name: Verify Agent Registration
+                  identifier: verify_agent_registration
+                  description: >-
+                    Helm reporting success only means the pods are steady. It says
+                    nothing about whether the controller actually registered the
+                    agent with Harness or recorded its project mapping — the two
+                    things this stage exists to achieve. Without this step a
+                    half-registered agent looks like a green pipeline.
+
+                    Requires the delegate's service account to be able to read
+                    HarnessGitopsAgent resources; if it cannot, this fails with a
+                    Forbidden rather than a timeout, which is the useful error.
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |-
+                          set -euo pipefail
+
+                          echo "waiting for the controller to register the agent..."
+                          for i in $(seq 1 30); do
+                            AGENT_ID=$(kubectl -n "$NS" get harnessgitopsagent "$NAME" \
+                              -o jsonpath='{.status.agentIdentifier}' 2>/dev/null || true)
+                            [ -n "$AGENT_ID" ] && break
+                            sleep 10
+                          done
+
+                          if [ -z "${AGENT_ID:-}" ]; then
+                            echo "FAILED: status.agentIdentifier never populated."
+                            kubectl -n "$NS" get harnessgitopsagent "$NAME" -o yaml || true
+                            exit 1
+                          fi
+                          echo "registered as: $AGENT_ID"
+
+                          echo "waiting for MappingReady..."
+                          if ! kubectl -n "$NS" wait "harnessgitopsagent/$NAME" \
+                               --for=condition=MappingReady --timeout=5m; then
+                            echo "FAILED: MappingReady never became True. Conditions:"
+                            kubectl -n "$NS" get harnessgitopsagent "$NAME" \
+                              -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}' || true
+                            echo "AgentNotHealthy here means the runtime is not connected to Harness;"
+                            echo "MappingVerificationFailed means it connected but the mapping did not verify."
+                            exit 1
+                          fi
+                          echo "agent registered and mapping verified."
+                    environmentVariables:
+                      - name: NS
+                        type: String
+                        value: <+infra.namespace>
+                      - name: NAME
+                        type: String
+                        value: <+serviceVariables.agent_name>
+                    outputVariables:
+                      - name: AGENT_ID
+                        type: String
+                        value: AGENT_ID
+                  timeout: 12m
+            rollbackSteps:
+              - step:
+                  type: HelmRollback
+                  name: Roll Back Agent
+                  identifier: rollback_agent
+                  spec: {}
+                  timeout: 10m
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback

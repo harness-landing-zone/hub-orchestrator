@@ -1,0 +1,95 @@
+# Example values for one Harness GitOps Agent instance.
+#
+# Copy this file, replace every placeholder, then:
+#
+#   helm dependency build .
+#   helm upgrade --install my-agent . \
+#     --namespace my-agent-ns --create-namespace \
+#     --values my-values.yaml
+#
+# Wait until the controller has written the token Secret
+# (kubectl get secret example-agent-token -n my-agent-ns), then enable the
+# runtime (phase two):
+#
+#   helm upgrade my-agent . --namespace my-agent-ns \
+#     --reuse-values --set gitopsAgent.enabled=true --wait
+#
+# Prerequisites: the harness-gitops-agent-operator controller is running in the
+# cluster, and Secret harness-api-key-secret (key: api_key) exists in the
+# release namespace — either pre-created manually or created by the chart via
+# harnessAgent.apiKeySecret (see below). Run one agent instance per namespace.
+
+harnessAgent:
+  metadata:
+    name: example-agent
+  spec:
+    name: example-agent
+    scope: PROJECT # PROJECT | ORG | ACCOUNT
+    apiKeySecretRef: harness-api-key-secret
+    tokenSecretRef: example-agent-token
+    # Optional: map an Argo CD AppProject to a Harness project.
+    projectMapping:
+      projectId: your-project-id
+      AppProject: default
+  # Alternative to pre-creating the API-key Secret: let the chart create it
+  # and inject the value at INSTALL TIME from your CD platform's secret
+  # manager — never from a committed plaintext value. With Harness CD, resolve
+  # the project secret directly in the external values file before Helm runs.
+  # The Secret carries helm.sh/resource-policy: keep so the controller
+  # finalizer can still deregister the agent during uninstall.
+  # apiKeySecret:
+  #   create: true
+  #   value: set-from-your-CD-secret-manager
+  # Optional: register the bootstrap Git repository in the bundled Argo CD so
+  # the agent can pull its desired state immediately (the Secret carries the
+  # Argo repository label and lives in the release namespace). Quote the two
+  # numeric GitHub ids. For CD-injected values use githubAppPrivateKeyB64
+  # (base64 of the .pem, single line); raw multiline githubAppPrivateKey
+  # suits hand-written values files.
+  # gitSecret:
+  #   create: true
+  #   url: https://github.com/example-org/my-bootstrap-repo.git
+  #   # AppProject name - scopes the repo to the mapped Harness project and
+  #   # to that AppProject in Argo; omit for an agent-global repository.
+  #   project: default
+  #   githubAppID: "123456"
+  #   githubAppInstallationID: "12345678"
+  #   githubAppPrivateKeyB64: base64-of-the-github-app-private-key-pem
+  # Or, with ONE combined secret from your CD platform, replace the three
+  # githubApp* fields with a single-line JSON object (ids quoted inside the
+  # JSON as well):
+  #   githubAppJson: '{"githubAppID":"123456","githubAppInstallationID":"12345678","githubAppPrivateKeyB64":"base64-of-pem"}'
+
+gitopsAgent:
+  argo-cd:
+    # Set false when the cluster already has the Argo CRDs (existing Argo CD
+    # or another agent instance).
+    crds:
+      install: true
+  harness:
+    identity:
+      accountIdentifier: your-account-id
+      orgIdentifier: your-org-id
+      # Required for PROJECT scope; leave "" for ORG or ACCOUNT scope.
+      projectIdentifier: your-project-id
+      agentIdentifier: example_agent
+  agent:
+    # Unique per install on the same cluster (names the agent ClusterRole).
+    harnessName: example-agent
+    existingSecrets:
+      # Must equal harnessAgent.spec.tokenSecretRef.
+      agentToken: example-agent-token
+
+appProject:
+  enabled: true
+
+# Optional: hub self-registration + root ApplicationSet. The Secret names
+# this cluster as a labeled Argo destination; with the runtime enabled
+# (phase two) a post-install hook creates the ApplicationSet that stamps a
+# root Application per hub-labeled cluster, syncing gitops/bootstrap of the
+# gitSecret repo (flat read; gitops/pending/ stages ApplicationSets for
+# one-at-a-time promotion with git mv).
+# hubCluster:
+#   enabled: true
+# rootAppSet:
+#   enabled: true

@@ -1,0 +1,16 @@
+infrastructureDefinition:
+  name: hub-hga-system
+  identifier: hub_hga_system
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  environmentRef: hub
+  deploymentType: NativeHelm
+  type: KubernetesDirect
+  spec:
+    # Kubernetes connector for the bootstrap-0 cluster. The delegate runs
+    # inside this cluster, so the connector should use the delegate's
+    # in-cluster credentials rather than a kubeconfig.
+    connectorRef: hub_bootstrap0
+    namespace: hga-system
+    releaseName: release-<+INFRA_KEY_SHORT_ID>
+  allowSimultaneousDeployments: false

@@ -1,0 +1,195 @@
+# Day-0 ACCOUNT-level agent values for the permanent bootstrap-0 hub.
+# Consumed by service hub_account_agent in harness_controllers/hub_orchistrator.
+#
+# Harness resolves these expressions before Helm renders the chart, so the
+# GitHub App credential reaches only the Kubernetes Secret and never git. Keep
+# Harness expression syntax out of comments — fetched values-file comments are
+# evaluated too.
+#
+# TOP-LEVEL global on purpose: helm only propagates `global:` from the values
+# root into subcharts. Nested under gitopsAgent.argo-cd it never reaches the
+# argo-cd templates.
+global:
+  image:
+    repository: docker.io/harness/argocd
+    tag: v3.3.10
+
+harnessAgent:
+  metadata:
+    name: <+serviceVariables.agent_name>
+  spec:
+    name: <+serviceVariables.agent_name>
+    scope: <+serviceVariables.agent_scope>
+    tokenSecretRef: <+serviceVariables.token_secret>
+    projectMapping:
+      projectId: <+project.identifier>
+      # Capital A and P are the chart's field name, not a typo.
+      AppProject: default
+  apiKeySecret:
+    # THIS chart creates the Secret now. Controller chart 0.5.0 dropped the
+    # apikey-secret template that 0.4.0 had, so the bootstrap chart is the only
+    # thing that writes it — and it writes it into this release's namespace,
+    # which is where the controller looks when apiKeySecretNamespace is empty.
+    #
+    # The Secret is named by harnessAgent.spec.apiKeySecretRef
+    # (harness-api-key-secret by default), so there is no name field here.
+    create: true
+    # Resolved by Harness at deploy time and written only to the Kubernetes
+    # Secret's stringData. The plaintext key never reaches git.
+    value: '<+secrets.getValue("hub_orchistrator_token")>'
+
+  # Register this repo in the bundled Argo CD so the hub can pull its own
+  # desired state immediately after install. The whole GitHub App credential
+  # resolves from ONE secret: a single-line JSON object carrying both ids as
+  # quoted strings plus the private key base64-encoded. Single-line matters —
+  # an expression resolved inside a fetched values file cannot span lines.
+  gitSecret:
+    create: true
+    url: https://github.com/harness-landing-zone/hub-orchestrator.git
+    project: default
+    # Global repo-creds companion Secret: ApplicationSet git generators resolve
+    # credentials outside any AppProject, so without this they fetch the private
+    # repo anonymously and fail. The repository entity stays project-scoped;
+    # only the credential is global.
+    credsTemplate: true
+    githubAppJson: '<+secrets.getValue("github_app")>'
+
+appProject:
+  enabled: true
+  name: default
+  # namespace omitted on purpose: defaults to the release namespace, which the
+  # infrastructure definition already sets to the agent namespace.
+  description: Default AppProject for the bootstrap-0 hub
+
+# Hub self-registration + root ApplicationSet. The cluster Secret names THIS
+# cluster hub-cluster and carries the fleet_member label the root ApplicationSet
+# selects on; the ApplicationSet then stamps the per-hub root Application.
+# Defaults carry both the names and the selector, so these only need switching
+# on — and the selector must never be emptied, since an empty clusters selector
+# matches every registered cluster, spokes included.
+hubCluster:
+  enabled: true
+
+rootAppSet:
+  enabled: true
+
+gitopsAgent:
+  # PHASE ONE installs with this false: the controller registers the agent with
+  # Harness and writes the token Secret, with no runtime running yet. Expect
+  # MappingReady: False / AgentNotHealthy at that point — the controller refuses
+  # to record a mapping it cannot verify against a live agent. Flip to true for
+  # phase two once status.agentIdentifier is set.
+  enabled: true
+  harness:
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    configMap:
+      logLevel: INFO
+      reconcile:
+        appsetReconcile: true
+    identity:
+      accountIdentifier: <+account.identifier>
+      # orgIdentifier AND projectIdentifier are both intentionally absent: the
+      # chart requires them empty at ACCOUNT scope. Setting either to "" is not
+      # the same as omitting it for every consumer downstream, so omit both.
+      agentIdentifier: <+serviceVariables.agent_identifier>
+    # ArgoCD Harness Plugin: resolves Harness expressions inside Argo-rendered
+    # manifests, which is how fleet registration secrets get their values.
+    # Requires helper image v0.0.11+ (chart default is v0.0.3, hence the
+    # container overrides below) and a repo-server restart on flip.
+    argocdHarnessPlugin:
+      enabled: true
+  agent:
+    harnessName: <+serviceVariables.agent_name>
+    existingSecrets:
+      agentToken: <+serviceVariables.token_secret>
+  argo-cd:
+    crds:
+      install: true
+      keep: true
+    configs:
+      cm:
+        cluster.inClusterEnabled: true
+    redis:
+      image:
+        repository: docker.io/harness/redis
+        tag: 7.4.8
+    # NOTE ON SIZING: the init container and the plugin sidecar below each
+    # request 500m CPU / 512Mi. Init containers do not stack with regular ones
+    # for scheduling, so the repo-server pod lands at roughly 1 CPU — half a
+    # 2-vCPU worker. Worth knowing when reading why a node looks full.
+    repoServer:
+      env:
+        - name: HELM_PLUGINS
+          value: /helm-sops-tools/helm-plugins/
+        - name: HELM_SECRETS_CURL_PATH
+          value: /helm-sops-tools/curl
+        - name: HELM_SECRETS_SOPS_PATH
+          value: /helm-sops-tools/sops
+        - name: HELM_SECRETS_KUBECTL_PATH
+          value: /helm-sops-tools/kubectl
+        - name: HELM_SECRETS_BACKEND
+          value: sops
+        - name: HELM_SECRETS_VALUES_ALLOW_SYMLINKS
+          value: "false"
+        - name: HELM_SECRETS_VALUES_ALLOW_ABSOLUTE_PATH
+          value: "true"
+        - name: HELM_SECRETS_VALUES_ALLOW_PATH_TRAVERSAL
+          value: "true"
+        - name: HELM_SECRETS_WRAPPER_ENABLED
+          value: "true"
+        - name: HELM_SECRETS_HELM_PATH
+          value: /usr/local/bin/helm
+        - name: PATH
+          value: /helm-sops-tools/helm-secrets:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      initContainers:
+        - name: sops-helm-secrets-tool
+          image: docker.io/harness/gitops-agent-installer-helper:v0.0.16
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          command: [sh, -ec]
+          args:
+            - |
+              cp -r /custom-tools/. /helm-sops-tools
+              cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm
+              mkdir -p /helm-sops-tools/helm-secrets && cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm-secrets/helm
+              chmod +x /helm-sops-tools/helm-secrets/*
+              chmod +x /helm-sops-tools/*
+          volumeMounts:
+            - mountPath: /helm-sops-tools
+              name: helm-sops-tools
+      extraContainers:
+        - command: [/var/run/argocd/argocd-cmp-server]
+          image: docker.io/harness/gitops-agent-installer-helper:v0.0.16
+          imagePullPolicy: IfNotPresent
+          name: argocd-harness-plugin
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: 512Mi
+            requests:
+              cpu: "0.5"
+              memory: 512Mi
+          securityContext:
+            capabilities:
+              drop:
+                - NET_RAW
+            runAsGroup: 999
+            runAsUser: 999
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /var/run/argocd
+              name: var-files
+            - mountPath: /home/argocd/cmp-server/plugins
+              name: plugins
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              name: argocd-harness-plugin
+              subPath: harness.yaml

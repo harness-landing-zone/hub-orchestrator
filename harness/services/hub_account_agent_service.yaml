@@ -1,0 +1,71 @@
+service:
+  name: Hub Account Agent
+  identifier: hub_account_agent
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  description: >-
+    The day-0 ACCOUNT-scoped Harness GitOps Agent on the permanent bootstrap-0
+    hub. Bootstrap chart 0.8.0 creates the HarnessGitopsAgent CR (reconciled by
+    hub_controller), the API-key Secret the controller reads, the Argo
+    repository credential, the hub cluster Secret and the root ApplicationSet.
+    ACCOUNT scope because this agent's job is to serve every org — an org-scoped
+    agent could never deploy into another org's projects. Everything after this
+    agent is bootstrapped through GitOps.
+  tags:
+    purpose: platform-cd
+    tier: bootstrap-0
+  serviceDefinition:
+    type: NativeHelm
+    spec:
+      manifests:
+        # Chart and values at one pinned commit, same reasoning as the
+        # controller service. gitops-helm 1.2.7 is vendored under the chart's
+        # charts/ directory with a Chart.lock, so nothing is fetched from the
+        # internet at deploy time.
+        - manifest:
+            identifier: agent_bootstrap_chart
+            type: HelmChart
+            spec:
+              store:
+                type: Github
+                spec:
+                  connectorRef: account.generic
+                  gitFetchType: Commit
+                  folderPath: charts/harness-gitops-agent-bootstrap
+                  repoName: hub-orchestrator
+                  commitId: <+input>
+              valuesPaths:
+                - values/account-agent-day0.yaml
+              skipResourceVersioning: false
+              helmVersion: V3
+      variables:
+        - name: agent_scope
+          type: String
+          description: >-
+            Harness agent scope. ACCOUNT for this hub. The chart requires BOTH
+            orgIdentifier and projectIdentifier to stay empty at ACCOUNT scope,
+            so the values file omits them entirely rather than setting "".
+          value: ACCOUNT
+        - name: agent_identifier
+          type: String
+          description: >-
+            Harness GitOps Agent identifier registered by the controller.
+            Underscores are allowed here, unlike the DNS-safe name below.
+          value: hub_account_agent
+        - name: agent_name
+          type: String
+          description: >-
+            DNS-safe display and resource name — CR metadata.name, agent display
+            name, and gitops-helm harnessName, which names the per-instance
+            ClusterRole. Must be unique per cluster.
+          value: hub-account-agent
+        - name: token_secret
+          type: String
+          description: >-
+            Controller-written agent token Secret. Must be identical for
+            harnessAgent.spec.tokenSecretRef and
+            gitopsAgent.agent.existingSecrets.agentToken — the chart fails the
+            render on a mismatch, deliberately, because a mismatch would run the
+            agent with a blank token.
+          value: hub-account-agent-token
+  gitOpsEnabled: false

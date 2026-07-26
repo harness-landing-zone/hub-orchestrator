@@ -1,0 +1,109 @@
+{{- /* Bootstrap repository registration. The bundled Argo CD watches its
+own (release) namespace for Secrets labeled argocd.argoproj.io/secret-type,
+so registering the bootstrap repository at install time lets a fresh agent
+pull its desired state without any console or API step. Repository Secrets
+are matched by that label - the Secret name itself is free-form, which is
+why it lives here as gitSecret.name and not in the HarnessGitopsAgent CR
+spec (the controller never reads it). The credential arrives either as the
+individual githubApp* fields or as ONE single-line JSON blob
+(githubAppJson), so a CD secret manager needs only one secret for the whole
+credential. */}}
+{{- $git := (.Values.harnessAgent).gitSecret }}
+{{- if and $git $git.create }}
+{{- $name := default "bootstrap-repo" $git.name }}
+{{- $url := required "harnessAgent.gitSecret.url is required" $git.url }}
+{{- $appID := $git.githubAppID }}
+{{- $installationID := $git.githubAppInstallationID }}
+{{- $privateKey := $git.githubAppPrivateKey }}
+{{- $privateKeyB64 := $git.githubAppPrivateKeyB64 }}
+{{- with $git.githubAppJson }}
+{{- if or $appID $installationID $privateKey $privateKeyB64 }}
+{{- fail "harnessAgent.gitSecret: set githubAppJson or the individual githubApp* fields, not both" }}
+{{- end }}
+{{- $app := fromJson . }}
+{{- if hasKey $app "Error" }}
+{{- fail (printf "harnessAgent.gitSecret.githubAppJson is not valid JSON: %s" (get $app "Error")) }}
+{{- end }}
+{{- $appID = get $app "githubAppID" }}
+{{- $installationID = get $app "githubAppInstallationID" }}
+{{- $privateKey = get $app "githubAppPrivateKey" }}
+{{- $privateKeyB64 = get $app "githubAppPrivateKeyB64" }}
+{{- end }}
+{{- if not $appID }}
+{{- fail "harnessAgent.gitSecret: githubAppID is required (individual field or githubAppJson key)" }}
+{{- end }}
+{{- if not $installationID }}
+{{- fail "harnessAgent.gitSecret: githubAppInstallationID is required (individual field or githubAppJson key)" }}
+{{- end }}
+{{- if not (kindIs "string" $appID) }}
+{{- fail "harnessAgent.gitSecret: githubAppID must be a string - quote it (unquoted YAML/JSON numbers of 7+ digits render in scientific notation)" }}
+{{- end }}
+{{- if not (kindIs "string" $installationID) }}
+{{- fail "harnessAgent.gitSecret: githubAppInstallationID must be a string - quote it (unquoted YAML/JSON numbers of 7+ digits render in scientific notation)" }}
+{{- end }}
+{{- if and $privateKey $privateKeyB64 }}
+{{- fail "harnessAgent.gitSecret: set githubAppPrivateKey or githubAppPrivateKeyB64, not both" }}
+{{- end }}
+{{- if not (or $privateKey $privateKeyB64) }}
+{{- fail "harnessAgent.gitSecret needs githubAppPrivateKey (multiline PEM) or githubAppPrivateKeyB64 (base64-encoded PEM)" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    argocd.argoproj.io/secret-type: repository
+    {{- include "harness-gitops-agent-bootstrap.labels" . | nindent 4 }}
+type: Opaque
+{{- if $privateKeyB64 }}
+data:
+  # Already base64: the key survives values-file injection as a single line
+  # and lands here without re-encoding.
+  githubAppPrivateKey: {{ $privateKeyB64 | quote }}
+{{- end }}
+stringData:
+  type: git
+  url: {{ $url | quote }}
+  {{- with $git.repoName }}
+  name: {{ . | quote }}
+  {{- end }}
+  {{- with $git.project }}
+  project: {{ . | quote }}
+  {{- end }}
+  githubAppID: {{ $appID | quote }}
+  githubAppInstallationID: {{ $installationID | quote }}
+  {{- with $privateKey }}
+  githubAppPrivateKey: |-
+    {{- . | trim | nindent 4 }}
+  {{- end }}
+{{- if $git.credsTemplate }}
+---
+{{- /* Global credential template (never project-scoped): ApplicationSet
+git generators resolve credentials outside any AppProject context, so the
+project-scoped repository Secret above is invisible to them. This
+repo-creds Secret carries the same GitHub App credential, matched by url
+prefix. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-creds
+  namespace: {{ .Release.Namespace }}
+  labels:
+    argocd.argoproj.io/secret-type: repo-creds
+    {{- include "harness-gitops-agent-bootstrap.labels" . | nindent 4 }}
+type: Opaque
+{{- if $privateKeyB64 }}
+data:
+  githubAppPrivateKey: {{ $privateKeyB64 | quote }}
+{{- end }}
+stringData:
+  url: {{ $url | quote }}
+  githubAppID: {{ $appID | quote }}
+  githubAppInstallationID: {{ $installationID | quote }}
+  {{- with $privateKey }}
+  githubAppPrivateKey: |-
+    {{- . | trim | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

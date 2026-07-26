@@ -1,0 +1,52 @@
+service:
+  name: Hub Controller
+  identifier: hub_controller
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  description: >-
+    Day-0 install of the Harness GitOps Agent controller (operator) on the
+    permanent bootstrap-0 hub, via Native Helm. Chart 0.5.0 and its values both
+    live in this repo, fetched at ONE pinned commit so they can never drift
+    apart. Image comes from Docker Hub with the tag chosen at run time, so a
+    controller upgrade is a pipeline input rather than a chart change.
+  tags:
+    purpose: platform-cd
+    tier: bootstrap-0
+  serviceDefinition:
+    type: NativeHelm
+    spec:
+      manifests:
+        # Chart AND values from this repo at the same commit. Keeping them in
+        # one manifest is deliberate: valuesPaths resolve against the chart's
+        # own store, so a single commitId pins both atomically. A separate
+        # Values manifest from a branch would let values drift ahead of the
+        # chart they were written for.
+        - manifest:
+            identifier: controller_chart
+            type: HelmChart
+            spec:
+              store:
+                type: Github
+                spec:
+                  connectorRef: account.generic
+                  gitFetchType: Commit
+                  folderPath: charts/harness-gitops-agent-controller
+                  repoName: hub-orchestrator
+                  commitId: <+input>
+              valuesPaths:
+                - values/controller-day0.yaml
+              skipResourceVersioning: false
+              helmVersion: V3
+      artifacts:
+        primary:
+          primaryArtifactRef: <+input>
+          sources:
+            - identifier: controller_image
+              type: DockerRegistry
+              spec:
+                connectorRef: account.DockerHub
+                imagePath: mkandylis/harness-gitops-agent-operator
+                # amd64 only — every release tag since v0.1.0 is single-arch.
+                # This will not schedule on an arm64 node.
+                tag: <+input>
+  gitOpsEnabled: false
