@@ -19,7 +19,25 @@ harness/
   environments/      the hub environment
   infrastructure/    deploy targets — connector + namespace per component
 values/              this hub's Helm values, one file per component
+bootstrap/           everything GitOps takes over after day 0 (see below)
+terraform/           the GitHub App credential secret, own state
 ```
+
+**`bootstrap/` is where day 0 hands over to GitOps.** The root ApplicationSet
+the agent installs syncs this folder to the hub by name, so anything dropped
+here is reconciled without touching Harness again. It is read **flat** —
+`recurse: false` — so one file per component at the top level, and anything
+under `bootstrap/exclude/` is skipped. `rootAppSet.path` in
+`values/account-agent-day0.yaml` points at it, overriding the chart default of
+`gitops/bootstrap`.
+
+**The `default` AppProject is the admin project.** A Harness agent files each
+Application under the Harness project mapped to its AppProject, so
+`harnessAgent.spec.projectMapping` pairing `hub_orchistrator` with AppProject
+`default` — and `rootAppSet.project` naming that same `default` — is what makes
+`hub_orchistrator` the project everything is bootstrapped from. The two sides
+have to agree: change one without the other and the root Applications are filed
+somewhere else, with nothing failing to say so.
 
 **Charts, values and pipeline live together on purpose.** Each Service fetches
 its chart and its values from this repo at ONE pinned commit, so they cannot

@@ -21,7 +21,13 @@ harnessAgent:
     name: <+serviceVariables.agent_name>
     scope: <+serviceVariables.agent_scope>
     tokenSecretRef: <+serviceVariables.token_secret>
+    # The admin mapping: Harness project hub_orchistrator to Argo AppProject
+    # default. A Harness agent files each Application under the Harness project
+    # mapped to its AppProject, so this pairing is what makes hub_orchistrator
+    # the project everything gets bootstrapped from. rootAppSet.project below
+    # must name this same AppProject.
     projectMapping:
+      # Resolves to the Harness project the pipeline runs in: hub_orchistrator.
       projectId: <+project.identifier>
       # Capital A and P are the chart's field name, not a typo.
       AppProject: default
@@ -72,6 +78,19 @@ hubCluster:
 
 rootAppSet:
   enabled: true
+  # This repo keeps its bootstrap manifests in bootstrap/ at the repo root, not
+  # the chart default gitops/bootstrap. Read flat - the generated Application
+  # sets recurse: false, so one file per component at the top level, and
+  # anything under exclude/ is skipped.
+  path: bootstrap
+  # Argo AppProject the root Applications are filed under. Pairs with
+  # harnessAgent.spec.projectMapping above: a Harness agent files each
+  # Application under the Harness project mapped to its AppProject, so naming
+  # default here is what puts everything this hub bootstraps into the
+  # hub_orchistrator project. Stated explicitly rather than left to the chart
+  # default, because the pairing is the point and is invisible otherwise -
+  # change one side without the other and the root Applications land elsewhere.
+  project: default
 
 gitopsAgent:
   # true installs in a single shot: the controller registers the agent and writes
