@@ -16,11 +16,6 @@ service:
     type: NativeHelm
     spec:
       manifests:
-        # Chart AND values from this repo at the same commit. Keeping them in
-        # one manifest is deliberate: valuesPaths resolve against the chart's
-        # own store, so a single commitId pins both atomically. A separate
-        # Values manifest from a branch would let values drift ahead of the
-        # chart they were written for.
         - manifest:
             identifier: controller_chart
             type: HelmChart
@@ -46,7 +41,5 @@ service:
               spec:
                 connectorRef: account.DockerHub
                 imagePath: mkandylis/harness-gitops-agent-operator
-                # amd64 only — every release tag since v0.1.0 is single-arch.
-                # This will not schedule on an arm64 node.
                 tag: <+input>
   gitOpsEnabled: false
