@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) and set the path to your .pem.
+#
+# app_id / installation_id must be QUOTED strings, not numbers.
+# To find them without guessing, mint an App JWT with the key and call
+#   GET https://api.github.com/app              -> app id
+#   GET https://api.github.com/app/installations -> installation id
+# A 401 on the first call means the .pem belongs to a different App.
+#
+# private_key_pem_file points at the RAW .pem. Do not pre-encode it.
+
+github_app = {
+  app_id               = "2780955"
+  installation_id      = "107783082"
+  private_key_pem_file = "../../secrets/github-app.pem"
+}

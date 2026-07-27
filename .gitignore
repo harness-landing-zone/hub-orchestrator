@@ -1,0 +1,19 @@
+# OpenTofu / Terraform.
+# State is the sensitive one: harness_platform_secret_text stores the secret
+# VALUE in plaintext in state, so the GitHub App private key lives there in
+# base64. Never commit it, and treat the state file like the .pem itself.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+crash.log
+
+# Never the key material itself, wherever it lands.
+*.pem
+*.key
+
+# NOTE: charts/*/charts/*.tgz and Chart.lock are committed ON PURPOSE - the
+# gitops-helm dependency is vendored so nothing is fetched from the internet
+# at deploy time, which is the usual reason Native Helm fails on a
+# locked-down cluster.

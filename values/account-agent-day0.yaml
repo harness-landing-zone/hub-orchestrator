@@ -74,11 +74,16 @@ rootAppSet:
   enabled: true
 
 gitopsAgent:
-  # PHASE ONE installs with this false: the controller registers the agent with
-  # Harness and writes the token Secret, with no runtime running yet. Expect
-  # MappingReady: False / AgentNotHealthy at that point — the controller refuses
-  # to record a mapping it cannot verify against a live agent. Flip to true for
-  # phase two once status.agentIdentifier is set.
+  # true installs in a single shot: the controller registers the agent and writes
+  # the token Secret, and this runtime mounts that Secret and connects, in one
+  # pass. Expect MappingReady: False / AgentNotHealthy transiently while the
+  # runtime starts — the controller refuses to record a mapping it cannot verify
+  # against a live agent, and records it once the agent is CONNECTED and HEALTHY.
+  #
+  # Set false to split the install when debugging: registration then happens with
+  # no runtime at all, so a registration failure cannot be mistaken for a runtime
+  # one. Flip back to true once status.agentIdentifier is set. The pipeline has no
+  # phase toggle, so that split is a manual values override.
   enabled: true
   harness:
     gitopsServerHost: https://app.harness.io/prod1/gitops

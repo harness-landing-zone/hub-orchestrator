@@ -53,20 +53,35 @@ registered the agent or recorded its project mapping.
 
 ## Install order
 
-Charts and repo first, then controller, then agent — in two phases.
+Charts and repo first, then controller, then agent. `hub_bootstrap_cd` does both
+in one run — stage `Deploy Controller`, then stage `Deploy Account Agent`.
 
-1. `hub_controller` → namespace `hga-system`. Installs the CRD and the operator,
-   and creates the `harness-api-key-secret` the controller reads for every agent.
-2. `hub_account_agent` **phase one** with `gitopsAgent.enabled=false`. The
-   controller registers the agent with Harness and writes the token Secret. Verify
-   `status.agentIdentifier` is set before continuing. `MappingReady: False /
-   AgentNotHealthy` here is expected — the controller will not record a mapping it
-   cannot verify against a running agent.
-3. `hub_account_agent` **phase two** with `gitopsAgent.enabled=true`. Lands Argo CD
-   and the gitops-agent, which mounts the token Secret and connects.
+1. `hub_controller` → namespace `hga-system`. Installs the CRD and the operator.
+   It does **not** create the API-key Secret: chart 0.5.0 dropped that template,
+   and the bootstrap chart writes it instead — see *Where the API key comes from*
+   below.
+2. `hub_account_agent` → namespace `hub-account-agent`. The bootstrap chart creates
+   the API-key Secret and the CR, the controller registers the agent with Harness
+   and writes the token Secret, and the bundled gitops-helm runtime mounts that
+   Secret and connects. `account-agent-day0.yaml` ships `gitopsAgent.enabled: true`,
+   so this is a single shot, not two passes.
 
 Verify: `MappingReady: True / MappingVerified`, and the agent shows
-**CONNECTED / HEALTHY** in the Harness UI.
+**CONNECTED / HEALTHY** in the Harness UI. The pipeline's `Verify Agent
+Registration` step asserts exactly that, so a green run already means it.
+
+**Why one shot is safe.** The controller re-verifies mapping state against live
+Harness on every reconcile rather than trusting its own status, so an agent whose
+runtime is not yet CONNECTED/HEALTHY just sits at `MappingReady: False /
+AgentNotHealthy` until it comes up, and records the mapping then. Expect that
+condition transiently mid-install — it is the controller refusing to record a
+mapping it cannot verify, not a failure.
+
+**Splitting it in two is a debugging technique, not the normal path.** Installing
+with `gitopsAgent.enabled=false`, confirming `status.agentIdentifier`, then
+flipping to `true` cleanly separates a registration problem from a runtime one.
+It needs a values override to do: the pipeline has no phase toggle. To install the
+controller alone, set the pipeline variable `deploy_agent=false` instead.
 
 ## Two things that bite
 
