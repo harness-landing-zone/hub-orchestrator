@@ -1,0 +1,30 @@
+# Test values for globalValuesObject functionality
+globalValuesObject:
+  commonLabels:
+    app.kubernetes.io/part-of: "eks-fleet-management"
+    managed-by: "gitops-fleet-management"
+    team: "platform"
+    global-test: "true"
+  commonAnnotations:
+    managed-by: "gitops-fleet-management"
+    global-annotation: "test-value"
+
+# Enable merging from component files
+mergeValues:
+  test:
+    use: true
+
+# Test components to verify globalValuesObject merging in the values/test.yaml
+# Common configuration
+syncPolicy:
+  automated:
+    selfHeal: true
+    allowEmpty: true
+    prune: true
+
+repoURLGit: "https://github.com/test/repo.git"
+repoURLGitRevision: "main"
+repoURLGitBasePath: ""
+valueFiles:
+  - "defaults"
+  - "environments/test"

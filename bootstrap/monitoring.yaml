@@ -132,12 +132,40 @@ spec:
               # turn this on before building any.
               persistence:
                 enabled: false
-              # ClusterIP deliberately. The worker VMs sit on libvirt's NAT
-              # network, so a NodePort on a worker is not reachable from the
-              # LAN. Reach it with:
-              #   kubectl --context hub -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+              # ClusterIP deliberately. A NodePort would bind on every node,
+              # including the LAN-facing host - and the worker VMs sit on
+              # libvirt's NAT network so a NodePort there is unreachable anyway.
+              # Traffic arrives via the Ingress below instead.
               service:
                 type: ClusterIP
+
+              # Reached at http://grafana.local.kandylis.co.uk
+              #
+              # The whole path: Route 53 wildcard *.local.kandylis.co.uk -> the
+              # host's Tailscale address -> ingress-nginx (pinned to that
+              # address, so tailnet only) -> this Service.
+              #
+              # GRAFANA IS THE ONLY THING GIVEN AN INGRESS, deliberately. It has
+              # a login. Prometheus has NO authentication whatsoever - an Ingress
+              # for it would hand every metric in the cluster (namespaces, pod
+              # names, image tags, node topology) to anything that reaches the
+              # host. Query Prometheus THROUGH Grafana's datasource proxy, or
+              # port-forward it for raw access. Argo CD needs nothing here: the
+              # Harness gitops-agent replaces argocd-server, so there is no UI.
+              #
+              # No tls: block on purpose. ingress-nginx is started with
+              # --default-ssl-certificate, so it already serves every host on
+              # :443 from one certificate. Today that is nginx's self-signed
+              # fallback (browsers warn); the moment cert-manager issues the
+              # real wildcard, HTTPS becomes trusted here with no change to this
+              # file. HTTP works today with no warning at all.
+              ingress:
+                enabled: true
+                ingressClassName: nginx
+                hosts:
+                  - grafana.local.kandylis.co.uk
+                path: /
+                pathType: Prefix
 
             prometheusOperator:
               resources:

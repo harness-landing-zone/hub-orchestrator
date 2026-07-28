@@ -1,0 +1,24 @@
+secrets:
+  enabled: false
+  enableAckPodIdentity: false
+  chartName: fleet-secret
+  defaultVersion: "0.1.0"
+  path: 'charts/fleet-secret'
+  namespace: "platform-system"
+  selector:
+    matchExpressions:
+      - key: enable_external_secret_resources
+        operator: In
+        values: ['true']
+argocd-projects-appset:
+  enabled: false
+  enableAckPodIdentity: false
+  chartName: argocd-project-appset
+  defaultVersion: "0.1.0"
+  path: 'charts/argocd-project-appset'
+  namespace: "platform-system"
+  selector:
+    matchExpressions:
+      - key: enable_argocd_project_appset
+        operator: In
+        values: ['true']

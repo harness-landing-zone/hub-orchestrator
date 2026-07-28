@@ -55,6 +55,25 @@ spec:
               # and cannot resolve the Services it proxies to.
               dnsPolicy: ClusterFirstWithHostNet
 
+              config:
+                # TAILNET ONLY. hostNetwork makes nginx listen on 0.0.0.0, and
+                # this host has six interfaces - including eno1 (192.168.0.236),
+                # the whole home LAN. Verified: a LAN client reached the
+                # controller over eno1, bypassing Tailscale entirely. "Only my
+                # devices" is not true without this line; every phone, TV and
+                # IoT device on the WiFi counts as a client.
+                #
+                # Pinning to the tailscale0 address is what makes the trust
+                # boundary match the intent.
+                #
+                # TRADE-OFF: the address must exist when the pod starts. If
+                # tailscale0 is down at boot the controller CrashLoops instead
+                # of quietly falling back to the LAN - which is the correct
+                # failure mode here, but it does couple ingress to Tailscale.
+                # Hardcoded because it is this host's identity; a second hub
+                # needs its own value.
+                bind-address: "100.103.105.59"
+
               # Selects the control-plane node by role rather than by hostname,
               # so a second hub gets this without editing the file.
               nodeSelector:
