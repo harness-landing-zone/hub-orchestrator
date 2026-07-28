@@ -1,0 +1,88 @@
+# Let's Encrypt issuers, solving DNS-01 against Route 53.
+#
+# PREREQUISITE - NOT IN GIT. Both issuers read AWS credentials from a Secret
+# named route53-credentials in the cert-manager namespace. It is created by hand
+# (or later by External Secrets) and must never be committed:
+#
+#   kubectl --context hub -n cert-manager create secret generic route53-credentials \
+#     --from-literal=access-key-id=AKIA... \
+#     --from-literal=secret-access-key=...
+#
+# The IAM user behind it needs exactly this, scoped to the kandylis.co.uk zone:
+#
+#   route53:GetChange                  on arn:aws:route53:::change/*
+#   route53:ChangeResourceRecordSets   on arn:aws:route53:::hostedzone/<ZONE_ID>
+#   route53:ListHostedZonesByName      on *          (see note below)
+#
+# ListHostedZonesByName is only needed because spec.hostedZoneID is omitted
+# below, which makes cert-manager discover the zone itself. To drop that
+# permission, look up the zone ID in the Route 53 console and add
+# `hostedZoneID: Z...` under route53: in both solvers.
+#
+# WHY THE SCOPING MATTERS: the apex of this zone carries live Google Workspace
+# and SES records (_dmarc, _amazonses, three _domainkey CNAMEs). A wildcard
+# Route 53 policy is how people accidentally break their own email. cert-manager
+# only ever writes _acme-challenge.local.kandylis.co.uk TXT records, which
+# collide with nothing above - but the policy should enforce that, not trust it.
+---
+# Production. Trusted by browsers. Rate limited: 5 failed validations per
+# hostname per hour, 50 certificates per registered domain per week.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-route53
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # Expiry notices go here. Not a login - just a contact address.
+    email: markos@kandylis.co.uk
+    privateKeySecretRef:
+      # cert-manager creates this; it is the ACME ACCOUNT key, not the cert key.
+      # Losing it only means re-registering with Let's Encrypt.
+      name: letsencrypt-route53-account-key
+    solvers:
+      - dns01:
+          route53:
+            # Route 53 is a global service, but the AWS SDK still requires a
+            # region for request signing. us-east-1 is the conventional choice
+            # and does not tie anything to that region.
+            region: us-east-1
+            accessKeyIDSecretRef:
+              name: route53-credentials
+              key: access-key-id
+            secretAccessKeySecretRef:
+              name: route53-credentials
+              key: secret-access-key
+        # Restrict this solver to the lab zone so the issuer can never be used
+        # to prove control of the apex domain.
+        selector:
+          dnsZones:
+            - local.kandylis.co.uk
+---
+# Staging. Issues UNTRUSTED certificates (browsers will warn) but has far higher
+# rate limits. Switch the Certificate's issuerRef to this one if the first
+# production order fails - burning production retries on an IAM misconfiguration
+# is the usual way people get locked out for an hour.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-route53-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: markos@kandylis.co.uk
+    privateKeySecretRef:
+      name: letsencrypt-route53-staging-account-key
+    solvers:
+      - dns01:
+          route53:
+            region: us-east-1
+            accessKeyIDSecretRef:
+              name: route53-credentials
+              key: access-key-id
+            secretAccessKeySecretRef:
+              name: route53-credentials
+              key: secret-access-key
+        selector:
+          dnsZones:
+            - local.kandylis.co.uk

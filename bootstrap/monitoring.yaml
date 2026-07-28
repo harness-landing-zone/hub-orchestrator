@@ -50,11 +50,45 @@ spec:
 
             prometheus:
               prometheusSpec:
-                retention: 7d
-                # Second bound on purpose: retention alone does not stop a
-                # scrape-volume spike filling the disk, and local-path volumes
-                # cannot be expanded (allowVolumeExpansion: false).
-                retentionSize: 8GB
+                # ---- Retention: read the block below before changing ------
+                # TWO bounds, and the SIZE one is what actually stops a disk
+                # filling. Time alone does not: a scrape-volume spike fills the
+                # volume long before the days run out.
+                #
+                # TIME is the primary control here, SIZE is the backstop -
+                # deliberately that way round. At ~102k series / 30s scrape this
+                # cluster produces roughly 0.5 GB/day, so 10d lands near 5 GB
+                # against a 9GB ceiling. Time reliably wins, and the size cap
+                # only ever engages if something abnormal happens (a scrape
+                # spike, or a cardinality explosion from a new ServiceMonitor).
+                #
+                # Set retention much higher and that inverts: at 30d the size
+                # cap would bind first, silently truncating history around day
+                # 18 while the config still claimed 30 days.
+                #
+                # 10d is sized to what this data is actually FOR: continuous
+                # verification compares a deployment against a recent baseline
+                # (hours to days), post-incident review needs days, and the
+                # weekly fstrim sawtooth needs a couple of cycles to read.
+                # Long-term capacity trending is the only case wanting more,
+                # and that is not a decision being made on a single-host lab.
+                retention: 10d
+                # WHY 9GB AND NOT MORE, when the node has ~28 GiB free:
+                # local-path is a hostPath provisioner with NO quota. It reports
+                # the whole 37.7 GiB node filesystem as the volume's capacity,
+                # so the 10Gi claim below is metadata, not a limit - Prometheus
+                # could physically fill the entire worker VM disk and take the
+                # node into DiskPressure, evicting pods. And because the volume
+                # is node-pinned, Prometheus could not reschedule away from it.
+                #
+                # Staying UNDER the declared 10Gi keeps this config honest: if
+                # the storage layer is ever swapped for a CSI driver that does
+                # enforce the claim, nothing silently breaks. ~10% is left for
+                # WAL and compaction overhead.
+                #
+                # To genuinely grow this, raise the claim below - do NOT just
+                # raise retentionSize past it.
+                retentionSize: 9GB
                 resources:
                   requests:
                     cpu: 250m
@@ -68,6 +102,14 @@ spec:
                       accessModes: [ReadWriteOnce]
                       resources:
                         requests:
+                          # IMMUTABLE ONCE CREATED. This renders into a
+                          # StatefulSet volumeClaimTemplate, and Kubernetes
+                          # forbids updating those in place - editing this
+                          # number makes the sync fail, it does not resize
+                          # anything. local-path also sets
+                          # allowVolumeExpansion: false, so there is no
+                          # expansion path either. Growing it means deleting the
+                          # StatefulSet (keeping the PVC) or losing history.
                           storage: 10Gi
                 # Scrape ServiceMonitors/PodMonitors from ANY release, not just
                 # this chart's. Without these the stack silently ignores every

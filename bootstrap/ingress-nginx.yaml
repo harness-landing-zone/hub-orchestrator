@@ -1,0 +1,121 @@
+# Ingress: ingress-nginx on every hub cluster.
+#
+# WHY IT RUNS ON THE CONTROL-PLANE NODE. The worker nodes are libvirt VMs on a
+# NAT network (192.168.122.x) and are not reachable from the LAN or the tailnet.
+# The Tailscale address that *.local.kandylis.co.uk resolves to lives on the
+# bare-metal host, which is the control-plane node - so that is the only place
+# an ingress can bind and actually be reachable. hostNetwork puts it on :80/:443
+# of that host directly; the control-plane taint is tolerated deliberately.
+#
+# This costs ~150Mi on the node that was tainted to protect QEMU memory. That is
+# an accepted trade: the taint exists to stop *general* scheduling, not to stop
+# the one workload that has to sit at the network edge.
+#
+# k3s was installed with --disable traefik, so nothing else holds :80/:443.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: ingress-nginx
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            # Same label the root ApplicationSet selects on. Never leave this
+            # empty: an empty clusters selector matches EVERY registered
+            # cluster, spokes included.
+            fleet_member: hub-cluster
+  template:
+    metadata:
+      name: 'ingress-nginx-{{.name}}'
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        namespace: ingress-nginx
+      source:
+        repoURL: https://kubernetes.github.io/ingress-nginx
+        chart: ingress-nginx
+        targetRevision: 4.15.1
+        helm:
+          releaseName: ingress-nginx
+          values: |
+            controller:
+              kind: Deployment
+              # One replica: hostNetwork means two pods would fight over :80 on
+              # the same node, and there is only one node that can host this.
+              replicaCount: 1
+
+              # Bind the host's real ports. Without this the controller is only
+              # reachable via a Service the tailnet cannot route to.
+              hostNetwork: true
+              # Required with hostNetwork, or the controller loses cluster DNS
+              # and cannot resolve the Services it proxies to.
+              dnsPolicy: ClusterFirstWithHostNet
+
+              # Selects the control-plane node by role rather than by hostname,
+              # so a second hub gets this without editing the file.
+              nodeSelector:
+                node-role.kubernetes.io/control-plane: "true"
+              tolerations:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                  effect: NoSchedule
+
+              ingressClassResource:
+                name: nginx
+                enabled: true
+                # Default class, so Ingress objects do not each need to name it.
+                default: true
+
+              # ALL TLS COMES FROM ONE WILDCARD CERT. Pointing the controller at
+              # a default certificate means any Ingress in any namespace gets
+              # HTTPS without carrying its own tls: block - and, critically,
+              # without needing the cert Secret copied into every namespace.
+              # One Certificate, one Let's Encrypt order, no secret replication.
+              # The Secret is created by bootstrap/cert-manager-config.yaml.
+              extraArgs:
+                default-ssl-certificate: ingress-nginx/wildcard-local-kandylis-tls
+
+              # Ingress .status.loadBalancer has nothing to report without a
+              # LoadBalancer Service, so state the address explicitly. This is
+              # cosmetic - it only affects what `kubectl get ingress` prints.
+              publishService:
+                enabled: false
+              service:
+                enabled: true
+                type: ClusterIP
+
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+
+              # Scraped by kube-prometheus-stack, which is configured with
+              # serviceMonitorSelectorNilUsesHelmValues: false and therefore
+              # picks up ServiceMonitors from other releases.
+              metrics:
+                enabled: true
+                serviceMonitor:
+                  enabled: true
+
+            # Nothing needs a default backend; unmatched hosts should 404.
+            defaultBackend:
+              enabled: false
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # Safe to prune here: ingress-nginx holds no persistent state.
+          prune: true
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m

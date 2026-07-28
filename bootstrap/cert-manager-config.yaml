@@ -1,0 +1,60 @@
+# cert-manager configuration: the ClusterIssuer and the wildcard Certificate.
+#
+# SEPARATE FROM bootstrap/cert-manager.yaml ON PURPOSE. These are cert-manager
+# CUSTOM RESOURCES, so they cannot be applied until that Application has
+# installed the CRDs. Argo has no ordering guarantee between two Applications,
+# so this one simply fails and retries until the CRDs exist - which is why the
+# retry budget below is longer than elsewhere. Putting them in the same Helm
+# release would deadlock instead: the chart would try to render CRs against
+# CRDs it is installing in the same pass.
+#
+# Sourced from git rather than a chart because these are plain manifests that
+# belong to this hub. bootstrap/ is read flat (recurse: false), so they live in
+# gitops/cert-manager/ and this Application points at that directory.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cert-manager-config
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            # Never leave this empty: an empty clusters selector matches EVERY
+            # registered cluster, spokes included.
+            fleet_member: hub-cluster
+  template:
+    metadata:
+      name: 'cert-manager-config-{{.name}}'
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        # ClusterIssuer is cluster-scoped; the Certificate is namespaced and
+        # pins its own namespace (ingress-nginx) in the manifest, because that
+        # is where the controller reads its default TLS certificate from.
+        namespace: cert-manager
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        path: gitops/cert-manager
+        targetRevision: HEAD
+        directory:
+          recurse: false
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # prune OFF. Pruning the Certificate deletes the issued Secret and
+          # forces a fresh Let's Encrypt order - straight into rate limits.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          # Longer than the others: this Application legitimately fails until
+          # bootstrap/cert-manager.yaml has finished installing the CRDs.
+          limit: 10
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 15m

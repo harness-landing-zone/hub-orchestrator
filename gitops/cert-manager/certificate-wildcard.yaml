@@ -1,0 +1,37 @@
+# The single wildcard certificate every service on this hub is served with.
+#
+# ONE CERTIFICATE, NOT ONE PER SERVICE. ingress-nginx is configured with
+#   --default-ssl-certificate=ingress-nginx/wildcard-local-kandylis-tls
+# so any Ingress in any namespace is served with this cert without carrying a
+# tls: block and without the Secret being copied into its namespace. The usual
+# alternative - a Certificate per namespace - means a Let's Encrypt order per
+# namespace and a much faster trip into the 50-certs-per-week limit.
+#
+# That is why this lives in the ingress-nginx namespace rather than beside the
+# issuer: a TLS Secret is only readable by the controller in its own namespace.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-local-kandylis
+  namespace: ingress-nginx
+spec:
+  secretName: wildcard-local-kandylis-tls
+  # Renew with 30 days left. Let's Encrypt certs are valid 90 days, so this
+  # leaves two full renewal attempts before anything expires.
+  duration: 2160h    # 90d
+  renewBefore: 720h  # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # Fresh key on every renewal.
+    rotationPolicy: Always
+  issuerRef:
+    name: letsencrypt-route53
+    kind: ClusterIssuer
+    group: cert-manager.io
+  # A DNS wildcard is SINGLE-LABEL. *.local.kandylis.co.uk covers
+  # grafana.local.kandylis.co.uk but NOT local.kandylis.co.uk itself, and NOT
+  # a.b.local.kandylis.co.uk. The apex is listed separately for that reason.
+  dnsNames:
+    - "*.local.kandylis.co.uk"
+    - "local.kandylis.co.uk"

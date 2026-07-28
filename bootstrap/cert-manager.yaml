@@ -1,0 +1,99 @@
+# cert-manager: issues the wildcard TLS certificate for *.local.kandylis.co.uk.
+#
+# DNS-01 against Route 53, not HTTP-01, for two reasons. HTTP-01 needs Let's
+# Encrypt to reach the cluster on port 80 from the internet, which would mean
+# opening the router - the one thing this lab does not do. DNS-01 only needs
+# OUTBOUND access to the Route 53 API. It is also the only challenge type that
+# can issue a WILDCARD certificate, which is what lets one cert cover every
+# service without a new order per hostname.
+#
+# The ClusterIssuer and the Certificate live in bootstrap/cert-manager-config.yaml
+# so they land AFTER the CRDs this Application installs.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cert-manager
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            # Never leave this empty: an empty clusters selector matches EVERY
+            # registered cluster, spokes included.
+            fleet_member: hub-cluster
+            enable: "false"
+  template:
+    metadata:
+      name: 'cert-manager-{{.name}}'
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        namespace: cert-manager
+      source:
+        repoURL: https://charts.jetstack.io
+        chart: cert-manager
+        # Chart version carries the leading v for cert-manager, unlike most
+        # charts. targetRevision: 1.21.0 will NOT resolve.
+        targetRevision: v1.21.0
+        helm:
+          releaseName: cert-manager
+          values: |
+            crds:
+              enabled: true
+              # Survive an uninstall. Deleting cert-manager's CRDs would delete
+              # every Certificate and Issuer object with them.
+              keep: true
+
+            # Sized for a lab. Defaults are fine but unbounded; these are the
+            # observed footprints with headroom.
+            resources:
+              requests:
+                cpu: 20m
+                memory: 64Mi
+              limits:
+                memory: 128Mi
+            webhook:
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 64Mi
+            cainjector:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 96Mi
+                limits:
+                  memory: 192Mi
+
+            # Scraped by kube-prometheus-stack. Gives cert expiry metrics -
+            # certmanager_certificate_expiration_timestamp_seconds is the one
+            # worth alerting on once Alertmanager has a destination.
+            prometheus:
+              enabled: true
+              servicemonitor:
+                enabled: true
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # prune OFF. crds.keep above protects the CRDs on uninstall, but a
+          # prune triggered by this file changing should never be able to take
+          # the issuer machinery out from under live Certificates.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+          # REQUIRED. cert-manager's CRDs exceed the 262144-byte
+          # last-applied-configuration annotation limit, so a client-side apply
+          # fails with "metadata.annotations: Too long" - the same failure mode
+          # kube-prometheus-stack has.
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m
