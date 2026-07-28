@@ -1,0 +1,169 @@
+# Monitoring: kube-prometheus-stack (Prometheus + Grafana + node-exporter +
+# kube-state-metrics) on every hub cluster.
+#
+# An ApplicationSet, not an Application, on purpose: bootstrap/ is synced to each
+# hub by the root Application, and a clusters generator here means a second
+# permanent hub gets monitoring by being labelled, not by editing this file.
+#
+# The chart bundles Grafana, so this one entry covers both. Alertmanager is off -
+# see below.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: monitoring
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            # Same label the root ApplicationSet selects on. Never leave this
+            # empty: an empty clusters selector matches EVERY registered
+            # cluster, spokes included.
+            fleet_member: hub-cluster
+  template:
+    metadata:
+      name: 'monitoring-{{.name}}'
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        namespace: monitoring
+      source:
+        repoURL: https://prometheus-community.github.io/helm-charts
+        chart: kube-prometheus-stack
+        targetRevision: 87.19.2
+        helm:
+          releaseName: kube-prometheus-stack
+          values: |
+            # ---- Sizing -------------------------------------------------
+            # This cluster has 3 worker VMs = 6 CPU total, and Argo CD plus the
+            # Harness delegate already request 3.15 of them. Everything below is
+            # sized to fit the ~2.85 cores that are left, with headroom. Do not
+            # install this chart with its defaults here.
+
+            # Nothing to route alerts to yet, and it is CPU/memory we do not
+            # have. Turn on once there is a destination worth paging.
+            alertmanager:
+              enabled: false
+
+            prometheus:
+              prometheusSpec:
+                retention: 7d
+                # Second bound on purpose: retention alone does not stop a
+                # scrape-volume spike filling the disk, and local-path volumes
+                # cannot be expanded (allowVolumeExpansion: false).
+                retentionSize: 8GB
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 2Gi
+                  limits:
+                    memory: 3Gi
+                storageSpec:
+                  volumeClaimTemplate:
+                    spec:
+                      storageClassName: local-path
+                      accessModes: [ReadWriteOnce]
+                      resources:
+                        requests:
+                          storage: 10Gi
+                # Scrape ServiceMonitors/PodMonitors from ANY release, not just
+                # this chart's. Without these the stack silently ignores every
+                # ServiceMonitor it did not create itself - including any the
+                # GitOps agent or the HGA controller ship.
+                serviceMonitorSelectorNilUsesHelmValues: false
+                podMonitorSelectorNilUsesHelmValues: false
+                ruleSelectorNilUsesHelmValues: false
+                probeSelectorNilUsesHelmValues: false
+
+            grafana:
+              enabled: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+              # No PVC: the stack's dashboards are provisioned from ConfigMaps
+              # and survive a restart on their own. Saves a second volume on
+              # Delete-reclaim storage. Hand-made dashboards would NOT survive -
+              # turn this on before building any.
+              persistence:
+                enabled: false
+              # ClusterIP deliberately. The worker VMs sit on libvirt's NAT
+              # network, so a NodePort on a worker is not reachable from the
+              # LAN. Reach it with:
+              #   kubectl --context hub -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+              service:
+                type: ClusterIP
+
+            prometheusOperator:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+
+            kube-state-metrics:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+
+            prometheus-node-exporter:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+              # Tolerate every taint so the DaemonSet also lands on the tainted
+              # control-plane node. That node is the bare-metal host, and its
+              # memory is the one number worth watching here: the worker VMs are
+              # guest processes on it, so host RAM includes them.
+              tolerations:
+                - operator: Exists
+
+            # ---- k3s specifics ------------------------------------------
+            # k3s runs controller-manager, scheduler, proxy and etcd inside the
+            # single k3s process rather than as separately scrapeable
+            # components. Left enabled, the chart creates ServiceMonitors for
+            # endpoints that do not exist and Prometheus shows permanently DOWN
+            # targets plus firing alerts that mean nothing.
+            kubeControllerManager:
+              enabled: false
+            kubeScheduler:
+              enabled: false
+            kubeProxy:
+              enabled: false
+            kubeEtcd:
+              enabled: false
+
+            # Same reasoning for the shipped alert rules that cover those
+            # components - keeps the alert list honest.
+            defaultRules:
+              rules:
+                kubeControllerManager: false
+                kubeSchedulerAlerting: false
+                kubeSchedulerRecording: false
+                kubeProxy: false
+                etcd: false
+      syncPolicy:
+        automated:
+          # selfHeal on: drift gets corrected, which is the point.
+          selfHeal: true
+          # prune OFF deliberately. local-path uses reclaimPolicy: Delete, so a
+          # pruned PVC destroys the TSDB. Removing this file from git should not
+          # be able to delete monitoring history. Flip to true once the data is
+          # either disposable or on storage that retains.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+          # REQUIRED. The prometheus-operator CRDs exceed the 262144-byte
+          # last-applied-configuration annotation limit, so a client-side apply
+          # fails with "metadata.annotations: Too long". This is the single most
+          # common way this chart fails under Argo.
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 30s
+            factor: 2
+            maxDuration: 10m
