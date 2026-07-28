@@ -25,6 +25,7 @@ spec:
             # Never leave this empty: an empty clusters selector matches EVERY
             # registered cluster, spokes included.
             fleet_member: hub-cluster
+            enable: "false"
   template:
     metadata:
       name: 'cert-manager-config-{{.name}}'
