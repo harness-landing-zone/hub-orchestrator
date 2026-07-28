@@ -48,9 +48,25 @@ manager:
   # acceptable trade inside a private cluster, and the reason this is not a
   # pattern to copy onto a shared one.
   #
-  # The chart ships no Service and no ServiceMonitor, so scrape with a
-  # PodMonitor, which selects pods directly and needs neither.
+  # Chart 0.6.0 added a metrics Service and an opt-in ServiceMonitor, so the
+  # PodMonitor this comment used to call for is no longer needed - and was never
+  # actually created.
   metrics:
     bindAddress: ":8080"
     port: 8080
     secure: false
+    serviceMonitor:
+      # THE POINT OF ALL OF THIS. Without a scrape of :8080, Prometheus sees the
+      # controller only through cAdvisor - container CPU and memory - and a
+      # reconciler stuck in a MappingMismatch retry loop looks IDENTICAL to a
+      # healthy one on those. This turns on the signals that tell them apart:
+      #   controller_runtime_reconcile_errors_total
+      #   controller_runtime_reconcile_time_seconds
+      #   workqueue_depth / workqueue_adds_total
+      # which is what makes a Harness CV Verify step able to judge a controller
+      # deployment on whether it RECONCILES, not merely whether it starts.
+      enabled: true
+      # No additionalLabels needed: this hub's kube-prometheus-stack runs with
+      # serviceMonitorSelectorNilUsesHelmValues=false, so it selects any
+      # ServiceMonitor rather than only those labelled with its release name.
+      interval: 30s
