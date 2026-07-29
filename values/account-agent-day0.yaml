@@ -27,6 +27,10 @@ harnessAgent:
     # the project everything gets bootstrapped from. rootAppSet.project below
     # must name this same AppProject.
     projectMapping:
+      # An ACCOUNT-scoped agent has no org of its own, so the mapped project's
+      # org must be stated per mapping (B12). Resolves to the org the pipeline
+      # runs in: harness_controllers.
+      orgId: <+org.identifier>
       # Resolves to the Harness project the pipeline runs in: hub_orchistrator.
       projectId: <+project.identifier>
       # Capital A and P are the chart's field name, not a typo.

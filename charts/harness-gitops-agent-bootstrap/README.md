@@ -94,7 +94,7 @@ deregisters the agent from Harness.
 | `gitopsAgent.harness.identity.*` | Account/org/project/agent identifiers, used by both the CR and the runtime |
 | `harnessAgent.spec.existingAgentIdentifier` | Existing shared agent to reuse for mapping-only mode; prevents agent creation and deletion |
 | `harnessAgent.spec.tokenSecretRef` | Secret the controller writes for a new agent; **must equal** `gitopsAgent.agent.existingSecrets.agentToken`. Omit both in existing-agent mode |
-| `harnessAgent.spec.projectMapping` | Optional Argo `AppProject` → Harness project mapping |
+| `harnessAgent.spec.projectMapping` | Optional Argo `AppProject` → Harness project mapping. `orgId` names the org that owns `projectId`; **required at `ACCOUNT` scope** (the agent has no org of its own — the render fails without it), optional at ORG/PROJECT scope where the controller falls back to the agent's org |
 | `appProject.sourceRepos`, `appProject.destinations` | Argo tenant boundaries. Replace wildcard defaults for shared-agent tenants |
 | `appProject.*ResourceWhitelist` | Resource-kind boundaries for the AppProject; shared tenants should grant only what their workloads need |
 | `harnessAgent.apiKeySecret.value` | API-key value supplied only at deploy time from the CD secret manager |
