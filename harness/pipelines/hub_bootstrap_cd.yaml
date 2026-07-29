@@ -193,9 +193,19 @@ pipeline:
                     Requires the delegate's service account to be able to read
                     HarnessGitopsAgent resources; if it cannot, this fails with a
                     Forbidden rather than a timeout, which is the useful error.
+
+                    delegateSelectors pins this step to the delegate inside the
+                    target cluster. A ShellScript step does NOT inherit the
+                    infrastructure connector's delegate: unpinned, it runs on
+                    whichever delegate answers — one 2026-07-29 run landed on a
+                    delegate on a different cluster, burned its timeouts on a
+                    cluster with no CRD, and the failure strategy rolled back a
+                    correct deployment (B13).
                   spec:
                     shell: Bash
                     onDelegate: true
+                    delegateSelectors:
+                      - local-server-delegate
                     source:
                       type: Inline
                       spec:
