@@ -178,6 +178,50 @@ spec:
                 requests:
                   cpu: 50m
                   memory: 128Mi
+              # HGA controller CRD state -> Prometheus (backlog I25). Exports
+              # hga_mapping_ready{name,namespace} as 1/0 from the MappingReady
+              # condition ("True"/"False" strings convert automatically) and
+              # hga_mapping_info with reason/agent/mapping-id labels. Without
+              # this, an invalid CR is INVISIBLE to metrics: the controller
+              # counts terminal validation failures as reconcile successes, so
+              # only the condition carries the truth.
+              rbac:
+                extraRules:
+                  - apiGroups: ["infrastructure.kandylis.co.uk"]
+                    resources: ["harnessgitopsagents"]
+                    verbs: ["list", "watch"]
+              customResourceState:
+                enabled: true
+                config:
+                  kind: CustomResourceStateMetrics
+                  spec:
+                    resources:
+                      - groupVersionKind:
+                          group: infrastructure.kandylis.co.uk
+                          version: v1
+                          kind: HarnessGitopsAgent
+                        metricNamePrefix: hga
+                        labelsFromPath:
+                          name: [metadata, name]
+                          namespace: [metadata, namespace]
+                        metrics:
+                          - name: mapping_ready
+                            help: MappingReady condition as a gauge (1 True, 0 False)
+                            each:
+                              type: Gauge
+                              gauge:
+                                path: [status, conditions, "[type=MappingReady]"]
+                                valueFrom: ["status"]
+                          - name: mapping_info
+                            help: Mapping identity and MappingReady reason as labels
+                            each:
+                              type: Info
+                              info:
+                                path: [status]
+                                labelsFromPath:
+                                  reason: [conditions, "[type=MappingReady]", reason]
+                                  agent_identifier: [agentIdentifier]
+                                  mapping_id: [argoProjectMappingId]
 
             prometheus-node-exporter:
               resources:
