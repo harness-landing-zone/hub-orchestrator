@@ -30,6 +30,11 @@ harnessAgent:
     # The Secret is named by harnessAgent.spec.apiKeySecretRef
     # (harness-api-key-secret by default), so there is no name field here.
     create: true
+    # Controller chart 0.8.0 reads the key from the CONTROLLER release
+    # namespace when apiKeySecretNamespace is empty, so render it there.
+    # This also keeps the finalizer's cleanup credential alive while the
+    # agent namespace itself is being deleted.
+    namespace: hga-system
     # Resolved by Harness at deploy time and written only to the Kubernetes
     # Secret's stringData. The plaintext key never reaches git.
     value: '<+secrets.getValue("hub_orchistrator_token")>'

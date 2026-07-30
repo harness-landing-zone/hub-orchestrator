@@ -20,19 +20,12 @@ crds:
   keep: true
 
 manager:
-  # Empty on purpose. The controller then looks for the API-key Secret in each
-  # agent CR's own namespace, which is exactly where the bootstrap chart creates
-  # it (harnessAgent.apiKeySecret.create in account-agent-day0.yaml).
-  #
-  # 0.5.0 dropped the apikey-secret template that 0.4.0 had, so this chart no
-  # longer creates the Secret at all — setting this to hga-system would point
-  # the controller at a namespace where nothing writes one.
-  #
-  # HARDENING, later: centralising the credential in hga-system is better than
-  # a copy per agent namespace, since this key can create agents account-wide.
-  # That needs something to create the Secret there — an Apply step in the
-  # pipeline, or a small chart of its own. Worth doing once there is more than
-  # one agent on this cluster.
+  # Empty resolves to THIS release's namespace under chart 0.8.0 — the
+  # centralized topology. The bootstrap chart renders the API-key Secret here
+  # (harnessAgent.apiKeySecret.namespace in account-agent-day0.yaml), which
+  # keeps the finalizer's cleanup credential alive even while an agent
+  # namespace is being deleted. This flipped in 0.8.0: 0.7.0 resolved empty
+  # to each agent CR's own namespace instead.
   apiKeySecretNamespace: ""
 
   # JSON logs rather than controller-runtime's development mode.

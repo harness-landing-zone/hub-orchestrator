@@ -27,6 +27,12 @@ harnessAgent:
   # CD system can inject the key from its secret manager at deploy time.
   apiKeySecret:
     create: false
+    # Namespace to render the Secret into. Empty = this release namespace.
+    # Set to the CONTROLLER release namespace when the controller runs with
+    # apiKeySecretNamespace empty (chart 0.8.0 default), which reads the key
+    # from its own namespace and keeps cleanup credentials alive even while
+    # an agent namespace is being deleted.
+    namespace: ""
     # Supply this only at deploy time from the CD platform's secret manager.
     # Harness CD resolves its secret expression in an external values file
     # before Helm renders the Kubernetes Secret.
