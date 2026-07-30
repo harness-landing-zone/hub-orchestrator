@@ -21,20 +21,6 @@ harnessAgent:
     name: <+serviceVariables.agent_name>
     scope: <+serviceVariables.agent_scope>
     tokenSecretRef: <+serviceVariables.token_secret>
-    # The admin mapping: Harness project hub_orchistrator to Argo AppProject
-    # default. A Harness agent files each Application under the Harness project
-    # mapped to its AppProject, so this pairing is what makes hub_orchistrator
-    # the project everything gets bootstrapped from. rootAppSet.project below
-    # must name this same AppProject.
-    projectMapping:
-      # An ACCOUNT-scoped agent has no org of its own, so the mapped project's
-      # org must be stated per mapping (B12). Resolves to the org the pipeline
-      # runs in: harness_controllers.
-      orgId: <+org.identifier>
-      # Resolves to the Harness project the pipeline runs in: hub_orchistrator.
-      projectId: <+project.identifier>
-      # Capital A and P are the chart's field name, not a typo.
-      AppProject: default
   apiKeySecret:
     # THIS chart creates the Secret now. Controller chart 0.5.0 dropped the
     # apikey-secret template that 0.4.0 had, so the bootstrap chart is the only
@@ -64,6 +50,23 @@ harnessAgent:
     credsTemplate: true
     githubAppJson: '<+secrets.getValue("github_app")>'
 
+# The admin mapping: Harness project hub_orchistrator to Argo AppProject
+# default - now a separate HarnessGitopsProjectMapping CR with its own
+# conditions, finalizer, and retry cycle. A Harness agent files each
+# Application under the Harness project mapped to its AppProject, so this
+# pairing is what makes hub_orchistrator the project everything gets
+# bootstrapped from. rootAppSet.project below must name this same AppProject.
+projectMappings:
+  - name: hub-admin
+    appProject: default
+    # An ACCOUNT-scoped agent has no org of its own, so the mapped project's
+    # org must be stated per mapping (B12). Resolves to the org the pipeline
+    # runs in: harness_controllers.
+    orgId: <+org.identifier>
+    # Resolves to the Harness project the pipeline runs in: hub_orchistrator.
+    projectId: <+project.identifier>
+    autoCreateServiceEnv: false
+
 appProject:
   enabled: true
   name: default
@@ -88,7 +91,7 @@ rootAppSet:
   # anything under exclude/ is skipped.
   path: bootstrap
   # Argo AppProject the root Applications are filed under. Pairs with
-  # harnessAgent.spec.projectMapping above: a Harness agent files each
+  # the projectMappings entry above: a Harness agent files each
   # Application under the Harness project mapped to its AppProject, so naming
   # default here is what puts everything this hub bootstraps into the
   # hub_orchistrator project. Stated explicitly rather than left to the chart
@@ -99,9 +102,9 @@ rootAppSet:
 gitopsAgent:
   # true installs in a single shot: the controller registers the agent and writes
   # the token Secret, and this runtime mounts that Secret and connects, in one
-  # pass. Expect MappingReady: False / AgentNotHealthy transiently while the
-  # runtime starts — the controller refuses to record a mapping it cannot verify
-  # against a live agent, and records it once the agent is CONNECTED and HEALTHY.
+  # pass. Expect the Mapping CR Ready: False / AgentNotHealthy transiently while
+  # the runtime starts — the mapping gates on the Agent CR's Healthy condition
+  # and converges once the agent is CONNECTED and HEALTHY.
   #
   # Set false to split the install when debugging: registration then happens with
   # no runtime at all, so a registration failure cannot be mistaken for a runtime

@@ -178,17 +178,24 @@ spec:
                 requests:
                   cpu: 50m
                   memory: 128Mi
-              # HGA controller CRD state -> Prometheus (backlog I25). Exports
-              # hga_mapping_ready{name,namespace} as 1/0 from the MappingReady
-              # condition ("True"/"False" strings convert automatically) and
-              # hga_mapping_info with reason/agent/mapping-id labels. Without
-              # this, an invalid CR is INVISIBLE to metrics: the controller
-              # counts terminal validation failures as reconcile successes, so
-              # only the condition carries the truth.
+              # HGA controller CRD state -> Prometheus (backlog I25). Since the
+              # CRD split, mappings are their own resource: hga_mapping_ready
+              # and hga_mapping_info now read HarnessGitopsProjectMapping (one
+              # series per mapping CR), and hga_agent_healthy reads the Agent's
+              # Healthy condition that every mapping gates on. Metric and label
+              # names are unchanged on purpose so existing dashboard queries
+              # keep working; only the meaning of "name" shifts from agent CR
+              # to mapping CR. Without this, an invalid CR is INVISIBLE to
+              # metrics: the controller counts terminal validation failures as
+              # reconcile successes, so only the condition carries the truth.
+              # Note: a Healthy condition of Unknown (health unreadable) does
+              # not convert to a number, so hga_agent_healthy goes ABSENT for
+              # that agent rather than 0 - absence means unreadable, 0 means
+              # observed unhealthy.
               rbac:
                 extraRules:
                   - apiGroups: ["infrastructure.kandylis.co.uk"]
-                    resources: ["harnessgitopsagents"]
+                    resources: ["harnessgitopsagents", "harnessgitopsprojectmappings"]
                     verbs: ["list", "watch"]
               customResourceState:
                 enabled: true
@@ -199,29 +206,45 @@ spec:
                       - groupVersionKind:
                           group: infrastructure.kandylis.co.uk
                           version: v1
-                          kind: HarnessGitopsAgent
+                          kind: HarnessGitopsProjectMapping
                         metricNamePrefix: hga
                         labelsFromPath:
                           name: [metadata, name]
                           namespace: [metadata, namespace]
                         metrics:
                           - name: mapping_ready
-                            help: MappingReady condition as a gauge (1 True, 0 False)
+                            help: Mapping Ready condition as a gauge (1 True, 0 False)
                             each:
                               type: Gauge
                               gauge:
-                                path: [status, conditions, "[type=MappingReady]"]
+                                path: [status, conditions, "[type=Ready]"]
                                 valueFrom: ["status"]
                           - name: mapping_info
-                            help: Mapping identity and MappingReady reason as labels
+                            help: Mapping identity and Ready reason as labels
                             each:
                               type: Info
                               info:
                                 path: [status]
                                 labelsFromPath:
-                                  reason: [conditions, "[type=MappingReady]", reason]
-                                  agent_identifier: [agentIdentifier]
-                                  mapping_id: [argoProjectMappingId]
+                                  reason: [conditions, "[type=Ready]", reason]
+                                  agent_identifier: [remote, agent, identifier]
+                                  mapping_id: [remote, mappingId]
+                      - groupVersionKind:
+                          group: infrastructure.kandylis.co.uk
+                          version: v1
+                          kind: HarnessGitopsAgent
+                        metricNamePrefix: hga
+                        labelsFromPath:
+                          name: [metadata, name]
+                          namespace: [metadata, namespace]
+                        metrics:
+                          - name: agent_healthy
+                            help: Agent Healthy condition as a gauge (1 True, 0 False; absent when Unknown)
+                            each:
+                              type: Gauge
+                              gauge:
+                                path: [status, conditions, "[type=Healthy]"]
+                                valueFrom: ["status"]
 
             prometheus-node-exporter:
               resources:

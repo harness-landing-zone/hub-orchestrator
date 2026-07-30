@@ -1,115 +1,208 @@
 # harness-gitops-agent-bootstrap
 
-Bootstrap a Harness GitOps Agent instance, or add a project mapping to an
-existing shared agent, using the
-[harness-gitops-agent-operator](../../README.md).
+Installs one Harness GitOps Agent runtime and its Kubernetes control-plane
+resources:
 
-For a new instance, one release:
+- one `HarnessGitopsAgent`;
+- zero or more `HarnessGitopsProjectMapping` resources, all referring to that
+  Agent in the release namespace;
+- the official Harness `gitops-helm` runtime;
+- optionally, one convenience Argo CD `AppProject`.
 
-1. Creates a `HarnessGitopsAgent` custom resource (phase one).
-2. The controller registers the agent with Harness, writes the agent token into
-   the Secret named by `tokenSecretRef`, and creates the optional AppProject
-   mapping.
-3. On upgrade with `gitopsAgent.enabled=true` (phase two), installs the
-   official [Harness gitops-helm chart](https://harness.github.io/gitops-helm/)
-   (Argo CD + GitOps agent), which consumes the controller-written token via
-   `agent.existingSecrets.agentToken`.
+The controller chart must be installed first. For a controller-created Agent,
+the bootstrap chart then supports a single-release flow: Kubernetes creates the
+Agent CR and runtime together, the runtime pods briefly wait for their token
+Secret, and the controller registers the Agent and writes that Secret. Mapping
+reconcilers wait until the referenced AppProject exists and the Harness Agent is
+connected and healthy.
 
-The agent token never appears in values, manifests, or Helm release state —
-only the controller and the target-namespace Secret hold it.
-
-For a shared agent, set `harnessAgent.spec.existingAgentIdentifier`, leave
-`gitopsAgent.enabled=false`, and omit both token Secret values. The release then
-contains only a mapping CR and, when enabled, an AppProject. Deleting that
-release removes its mapping but never deregisters the shared agent.
+The token never appears in values, rendered manifests, or Helm release state.
+Only the controller and the target Secret handle it.
 
 ## Prerequisites
 
-- The operator (controller) is installed in the cluster and healthy
-  (`charts/harness-gitops-agent-controller`).
-- A Harness API key is available to the release. Either pre-create a Secret
-  **in the release namespace** with the name from
-  `harnessAgent.spec.apiKeySecretRef` (default `harness-api-key-secret`) and
-  key `api_key`, or enable `harnessAgent.apiKeySecret.create`. For Harness CD,
-  resolve the project secret directly into `harnessAgent.apiKeySecret.value`
-  in the external values file. Harness resolves it before Helm rendering, and
-  the chart writes it to the Kubernetes Secret `stringData` field. Do not put
-  placeholder Harness expressions in values-file comments because Harness
-  evaluates those too. Use a least-privilege service-account key and never
-  commit or print it.
-- One agent instance per namespace: the runtime chart uses fixed component
-  names (`gitops-agent`, `argocd-*`), and Harness expects one agent runtime per
-  namespace.
-- On clusters that already have the Argo CRDs (an existing Argo CD or another
-  agent instance), set `gitopsAgent.argo-cd.crds.install=false`.
-- When installing more than one instance on the same cluster, give each release
-  a unique `gitopsAgent.agent.harnessName` (it names the agent
-  ClusterRole/ClusterRoleBinding) and a unique
-  `gitopsAgent.harness.identity.agentIdentifier`.
+- The controller from `charts/harness-gitops-agent-controller` is running. Its
+  chart installs both required CRDs.
+- A Secret containing the Harness API key exists in the controller's configured
+  API-key namespace. The controller Helm chart defaults this to its own release
+  namespace; a directly run controller without
+  `--api-key-secret-namespace` instead reads from each Agent namespace. Its name
+  is `harnessAgent.spec.apiKeySecretRef` and its data key is `api_key`.
+- Use a least-privilege Harness service-account key. Never place the key in
+  chart values.
+- Run one Agent runtime per namespace because the upstream runtime uses fixed
+  component names.
+- Give every instance on the same cluster a unique
+  `gitopsAgent.agent.harnessName` and Harness Agent identifier.
 
 ## Install
 
-See [values-example.yaml](values-example.yaml) for a commented starting point.
+Copy [values-example.yaml](values-example.yaml), replace its placeholders, and
+install:
 
 ```sh
 helm dependency build .
 
-# Phase one: CR only — the controller registers the agent and writes the token
 helm upgrade --install my-agent . \
-  --namespace my-agent-ns --create-namespace \
-  --values my-values.yaml
-
-# Wait for the controller-written token Secret
-kubectl get secret <tokenSecretRef> -n my-agent-ns
-
-# Phase two: install the agent runtime
-helm upgrade my-agent . --namespace my-agent-ns \
-  --reuse-values --set gitopsAgent.enabled=true --wait
+  --namespace my-agent-ns \
+  --create-namespace \
+  --values my-values.yaml \
+  --wait \
+  --timeout 10m
 ```
 
-## Map a project to an existing shared agent
+`gitopsAgent.enabled=true` and `appProject.enabled=false` are the safe defaults
+for a clean cluster. The temporary `CreateContainerConfigError` while the token
+Secret is absent is expected; the controller creates the Secret and the pods
+then start.
 
-Install the chart into the existing agent's namespace. The API key Secret is
-still required by the controller, but no agent token is created or consumed.
+### Optional AppProject convenience
+
+The upstream dependency renders Argo CRDs as normal Helm templates. On a clean
+cluster, Helm validates this chart's AppProject before that same release has
+installed the CRD, so one render cannot safely create both.
+
+The chart fails with a clear message when `appProject.enabled=true` and the
+AppProject API is not already available. After the first install above:
 
 ```sh
-helm upgrade --install my-project-mapping . \
-  --namespace shared-agent-namespace \
-  --values my-mapping-values.yaml
+helm upgrade my-agent . \
+  --namespace my-agent-ns \
+  --reuse-values \
+  --set appProject.enabled=true \
+  --wait
 ```
 
-The AppProject is an ordinary Helm-managed resource in this mode. It is also
-managed normally for new instances when `gitopsAgent.argo-cd.crds.install` is
-`false`. Only a fresh runtime that installs the Argo CRDs uses the post-install
-hook needed to establish CRD ordering.
+If the cluster already has the AppProject CRD, `appProject.enabled=true` works
+on the first install. Set `gitopsAgent.argo-cd.crds.install=false` when another
+Argo CD installation owns those CRDs. The convenience AppProject is always
+created in the bootstrap release namespace because Mapping lookup and
+`agentRef` are intentionally same-namespace.
 
-Uninstalling the release deletes the CR; the controller finalizer then
-deregisters the agent from Harness.
+## One Agent, many mappings
+
+Mappings are top-level list entries, not fields embedded in the Agent:
+
+```yaml
+projectMappings:
+  - name: payments
+    appProject: payments
+    orgId: platform
+    projectId: payments
+    autoCreateServiceEnv: false
+
+  - name: orders
+    appProject: orders
+    orgId: commerce
+    projectId: orders
+    autoCreateServiceEnv: true
+```
+
+Each entry becomes an independent `HarnessGitopsProjectMapping`. A failure or
+ownership decision for one mapping does not block status reporting for the
+others.
+
+Harness allows one Argo CD AppProject to map to only one Harness project. Do
+not repeat an `appProject` for different Harness targets; create distinct Argo
+AppProjects instead.
+
+Agent identity and Mapping target fields are immutable Kubernetes API identity.
+Replace the affected CR (or use a new Mapping name) to change them;
+`adoptMappingId` remains mutable so a failed adoption can be corrected in
+place.
+
+The chart rejects blank or duplicate mapping names, blank AppProject names, and
+targets that do not fit the Agent scope:
+
+| Agent scope | Mapping target |
+|---|---|
+| `ACCOUNT` | `orgId` and `projectId` are required on every mapping |
+| `ORG` | `projectId` is required; `orgId` is omitted or exactly matches the Agent org |
+| `PROJECT` | both values are normally omitted and inherited; explicit values must exactly match the Agent |
+
+The former `harnessAgent.spec.projectMapping` key is intentionally unsupported
+and causes rendering to fail. Use `projectMappings` instead.
+
+When `autoCreateServiceEnv` is enabled, Harness inspects Applications for
+`harness.io/serviceRef` and `harness.io/envRef` labels. Their values become
+Harness identifiers and invalid values can fail silently. After removing a
+mapping, wait at least 30 seconds before re-adding it if the auto-create flow
+must run; this is a Harness Redis-cache requirement, separate from the
+controller's finalizer visibility grace. See the
+[Harness BYOA mapping documentation](https://developer.harness.io/docs/continuous-delivery/gitops/connect-and-manage/multiple-argo-to-single-harness/).
+
+## Ownership and adoption
+
+Ownership is fail-closed:
+
+- A mapping created and verified by the controller becomes `Managed`.
+- A matching mapping that already exists is observed as `External` by default.
+- Setting `adoptMappingId` asks the controller to adopt one exact existing
+  Harness mapping.
+
+Example:
+
+```yaml
+projectMappings:
+  - name: adopted-payments
+    appProject: payments
+    orgId: platform
+    projectId: payments
+    adoptMappingId: existing-harness-mapping-id
+```
+
+Adoption succeeds only if that ID exists and its complete Agent, org, project,
+AppProject, and option tuple matches the requested resource. A wrong or missing
+ID fails closed and does not create a replacement. `adoptMappingId` is
+correctable recovery input, so it can be fixed without replacing the Mapping
+CR.
+
+Deleting a `Managed` or `Adopted` Mapping CR authorizes deletion of that exact
+remote mapping. Deleting an `External` Mapping CR does not. Similarly, an Agent
+created by the controller is managed, while
+`harnessAgent.spec.existingAgentIdentifier` refers to an external Agent that is
+not deregistered by finalization.
+
+`External` describes deletion ownership, not an observe-only policy. If an
+external mapping later disappears, the controller restores the desired mapping
+and owns the verified replacement as `Managed`.
+
+### Existing Agent mode
+
+When `harnessAgent.spec.existingAgentIdentifier` is set, the controller observes
+that Agent but does not register it and does not write a token Secret.
+
+- If the existing Agent runtime already runs elsewhere, set
+  `gitopsAgent.enabled=false`; this chart then creates only the Agent and Mapping
+  control-plane resources.
+- If this chart should run the runtime for that existing Agent, create a valid
+  token Secret in the bootstrap release namespace before installing. Set both
+  `harnessAgent.spec.tokenSecretRef` and
+  `gitopsAgent.agent.existingSecrets.agentToken` to that Secret name.
+
+In either case, deleting the Agent CR leaves the external Harness Agent intact.
+
+## Uninstall
+
+```sh
+helm uninstall my-agent --namespace my-agent-ns
+```
+
+Helm marks the Mapping and Agent resources for deletion. Their finalizers keep
+the controller involved until managed or adopted Harness resources are cleaned
+up; external resources remain. Keep the controller and API-key Secret available
+until finalization finishes.
 
 ## Key values
 
 | Value | Meaning |
 |---|---|
-| `harnessAgent.spec.scope` | `PROJECT`, `ORG`, or `ACCOUNT`; drives which identity fields are required |
-| `gitopsAgent.harness.identity.*` | Account/org/project/agent identifiers, used by both the CR and the runtime |
-| `harnessAgent.spec.existingAgentIdentifier` | Existing shared agent to reuse for mapping-only mode; prevents agent creation and deletion |
-| `harnessAgent.spec.tokenSecretRef` | Secret the controller writes for a new agent; **must equal** `gitopsAgent.agent.existingSecrets.agentToken`. Omit both in existing-agent mode |
-| `harnessAgent.spec.projectMapping` | Optional Argo `AppProject` → Harness project mapping. `orgId` names the org that owns `projectId`; **required at `ACCOUNT` scope** (the agent has no org of its own — the render fails without it), optional at ORG/PROJECT scope where the controller falls back to the agent's org |
-| `appProject.sourceRepos`, `appProject.destinations` | Argo tenant boundaries. Replace wildcard defaults for shared-agent tenants |
-| `appProject.*ResourceWhitelist` | Resource-kind boundaries for the AppProject; shared tenants should grant only what their workloads need |
-| `harnessAgent.apiKeySecret.value` | API-key value supplied only at deploy time from the CD secret manager |
-| `harnessAgent.gitSecret.*` | Optional bootstrap-repo registration: renders an Argo CD repository Secret (GitHub App credential) in the release namespace. Accepts individual `githubApp*` fields or one single-line `githubAppJson` blob so the CD platform needs only one secret; private key as base64 (`githubAppPrivateKeyB64`) for CD-injected values |
-| `hubCluster.*` | Optional hub self-registration: renders the argocd cluster Secret naming THIS cluster as a labeled Argo destination (default name `hub-cluster`, label `fleet_member: hub-cluster`, plus free-form labels/annotations). A plain resource, patched in place across upgrades |
-| `rootAppSet.*` | Optional root ApplicationSet: with the runtime enabled, a post-install hook (after the AppProject) creates an ApplicationSet whose clusters generator stamps one root Application per hub-labeled cluster Secret, syncing a flat git folder (default `gitops/bootstrap` of the `gitSecret` repo) to that hub by name with an explicit `directory` source |
-| `gitopsAgent.enabled` | Phase switch: `false` = CR only, `true` = install the runtime |
-| `gitopsAgent.agent.harnessName` | Names the agent ClusterRole/Binding; unique per install |
-| `gitopsAgent.upgrader.enabled` | Off by default: the upgrader breaks with `existingSecrets` and pinned installs should not self-upgrade |
-
-## CI/CD usage
-
-The repository's CD pipeline uses this chart as its functional end-to-end
-test: it installs one PROJECT-scoped and one ORG-scoped instance in separate
-namespaces, verifies the agents report CONNECTED/HEALTHY in Harness, then
-uninstalls and verifies deregistration. Identity values are injected by the
-pipeline at runtime; only this chart and the example values live in the
-repository.
+| `harnessAgent.spec.scope` | `PROJECT`, `ORG`, or `ACCOUNT` |
+| `gitopsAgent.harness.identity.*` | Shared account/org/project/Agent identity |
+| `harnessAgent.spec.tokenSecretRef` | Secret written by the controller; must equal `gitopsAgent.agent.existingSecrets.agentToken` |
+| `projectMappings` | Independent AppProject-to-Harness-project mappings |
+| `projectMappings[].adoptMappingId` | Optional request to claim one exact existing mapping |
+| `projectMappings[].autoCreateServiceEnv` | Enable Harness label-driven service/environment creation |
+| `gitopsAgent.enabled` | Install the upstream runtime; defaults to `true` |
+| `appProject.enabled` | Create one convenience AppProject, only when its CRD already exists |
+| `gitopsAgent.agent.harnessName` | Names cluster-scoped runtime RBAC; keep unique per install |

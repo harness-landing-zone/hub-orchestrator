@@ -1,6 +1,7 @@
 # Map one Harness project to an AppProject on an existing shared ORG agent.
 # Install this release in the shared agent's namespace. No agent runtime or
-# token Secret is created, and deleting it never deregisters the shared agent.
+# token Secret is created, and deleting this release removes only the mappings
+# it created - never the shared agent, and never a mapping it merely observed.
 
 harnessAgent:
   metadata:
@@ -10,9 +11,14 @@ harnessAgent:
     scope: ORG
     existingAgentIdentifier: shared_org_agent
     apiKeySecretRef: harness-api-key-secret
-    projectMapping:
-      projectId: example-project
-      AppProject: tenant-example-project
+
+# Each entry is its own HarnessGitopsProjectMapping CR with independent
+# conditions and retries. At ORG scope the org is inherited from the shared
+# agent; each mapped project is stated per entry.
+projectMappings:
+  - name: example-project
+    appProject: tenant-example-project
+    projectId: example-project
 
 appProject:
   enabled: true
@@ -23,20 +29,14 @@ appProject:
   destinations:
     - namespace: example-project
       server: https://kubernetes.default.svc
-  clusterResourceWhitelist: []
-  namespaceResourceWhitelist:
-    - group: "*"
-      kind: "*"
-  orphanedResources:
-    warn: true
 
 gitopsAgent:
+  # No runtime: the shared agent already runs elsewhere in this namespace.
   enabled: false
   harness:
     identity:
       accountIdentifier: your-account-id
-      orgIdentifier: your-org-id
+      # Must match the shared agent's org so mapping validation can inherit it.
+      orgIdentifier: example-org
       projectIdentifier: ""
-      # This identifies the mapping CR. The shared agent itself is selected by
-      # harnessAgent.spec.existingAgentIdentifier above.
-      agentIdentifier: example_project_mapping
+      agentIdentifier: shared_org_agent
