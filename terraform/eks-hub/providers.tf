@@ -4,35 +4,23 @@ provider "helm" {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
 
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      # This requires the awscli to be installed locally where Terraform is executed
-      args = [
-        "eks",
-        "get-token",
-        "--cluster-name", module.eks.cluster_name,
-        "--region", local.region
-      ]
-    }
+    # Same reason as the kubernetes provider below - no aws binary on the
+    # runner. Unused today (no helm resources), fixed anyway so the next
+    # person to add one does not rediscover this the hard way.
+    token = data.aws_eks_cluster_auth.this.token
   }
 }
 
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  # insecure = true
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    # This requires the awscli to be installed locally where Terraform is executed
-    args = [
-      "eks",
-      "get-token",
-      "--cluster-name", module.eks.cluster_name,
-      "--region", local.region
-    ]
-  }
+
+  # Token generated IN-PROVIDER rather than by shelling out to `aws eks
+  # get-token`. The Harness IaCM runner image ships no aws binary, so the exec
+  # form fails with "executable aws not found" the moment any kubernetes
+  # resource is applied. This path reuses the AWS provider's own credentials -
+  # here the OIDC role the runner already assumed - and needs no CLI.
+  token = data.aws_eks_cluster_auth.this.token
 }
 
 provider "aws" {

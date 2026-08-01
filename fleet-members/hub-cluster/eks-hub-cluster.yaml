@@ -10,8 +10,8 @@
 # two namespaces of meaning, no collision.
 clusterName: eks-hub-cluster
 
-# From `tofu output cluster_endpoint` on the eks-hub workspace.
-server: REPLACE-ME
+# From `cluster_endpoint` output of the eks-hub workspace.
+server: https://C942DA83313920F0BFB4D7AF438A0046.gr7.eu-west-2.eks.amazonaws.com
 
 environment: np
 tenant: control-plane
