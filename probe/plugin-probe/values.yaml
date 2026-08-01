@@ -1,0 +1,17 @@
+# Static on purpose - the ApplicationSet passes nothing, so this file is the
+# whole experiment. Edit here, push, hard-refresh the app.
+#
+# Single quotes inside getValue: an expression that is NOT substituted still
+# leaves a valid line. The double-quoted form is what produced invalid JSON on
+# 2026-07-17.
+expressions:
+  # The secret that already exists: PROJECT scope, AWS Secrets Manager backed.
+  # Docs say the plugin supports only Harness SM / Vault, and an ACCOUNT-scoped
+  # agent resolves at account scope - so this is expected to fail. We run it to
+  # see HOW it fails, and what a resolved value actually looks like if it does.
+  projectAsm: "<+secrets.getValue('hub-secret')>"
+
+  # Uncomment once an ACCOUNT-level Harness Secret Manager secret named
+  # plugin_probe exists. This is the combination the fleet design depends on,
+  # so it is the one that has to work.
+  # accountInline: "<+secrets.getValue('account.plugin_probe')>"

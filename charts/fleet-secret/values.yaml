@@ -1,0 +1,41 @@
+# Example of global values to append if we want to add more endpoints withough replciation
+global:
+  gitExternalSecrets:
+    enabled: false
+    useGitHubApp: true
+    secretStoreRefName: fleet-git-eks-secret-store
+    secretStoreRefKind: SecretStore
+    externalSecrets: {}
+
+  # ecrAuthenticationToken:
+  #   registry_endpoints:
+  #     - 1234456698772.dkr.ecr.eu-west-2.amazonaws.com
+
+
+secretStore:
+  enabled: false
+  kind: "SecretStore"
+  name: "aws-secrets-manager"
+  region: ""
+  role: ""
+
+externalSecret:
+  enabled: false
+  secretStoreRefName: "fleet-eks-secret-store"
+  secretStoreRefKind: "SecretStore"
+  server: "self"
+  secretManagerSecretName: ""
+  clusterName: ""
+
+tenantGitExternalSecrets:
+  externalSecrets: {}
+
+ecrAuthenticationToken:
+  enabled: false
+  name: ecr-token-secret
+  namespace: argocd
+  region: "eu-west-2"
+  secretName: argocd-ecr-credentials
+  registry_endpoints: 
+    - 12345678910.dkr.ecr.eu-west-2.amazonaws.com
+    - 10987654321.dkr.ecr.eu-west-2.amazonaws.com

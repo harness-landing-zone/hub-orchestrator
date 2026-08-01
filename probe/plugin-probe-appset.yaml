@@ -1,0 +1,53 @@
+# HAND-APPLIED probe. Deliberately NOT in bootstrap/, so the root Application
+# never syncs it and nothing here outlives the experiment.
+#
+#   kubectl --context hub -n hub-account-agent apply -f probe/plugin-probe-appset.yaml
+#
+# Teardown:
+#   kubectl --context hub -n hub-account-agent delete applicationset plugin-probe
+#   kubectl --context hub delete ns plugin-probe
+#
+# Edits to THIS file re-apply locally. Edits to probe/plugin-probe/ must be
+# PUSHED first - Argo renders from git, not from your working copy - then hard
+# refresh the app.
+#
+# It passes NO parameters: the chart's values.yaml holds the expressions
+# statically, so the whole experiment is edited in one place. The single-element
+# list generator exists only because an ApplicationSet requires a generator.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: plugin-probe
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        elements:
+          - probe: plugin
+  template:
+    metadata:
+      name: 'plugin-probe'
+      labels:
+        app.kubernetes.io/part-of: plugin-probe
+    spec:
+      project: default
+      destination:
+        name: hub-cluster
+        namespace: plugin-probe
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        targetRevision: HEAD
+        path: probe/plugin-probe
+        # An explicit plugin block means Argo never silently falls back to
+        # native helm: if the CMP is absent or its render fails, the app sits in
+        # ComparisonError and applies nothing.
+        plugin: {}
+      syncPolicy:
+        # No automated sync. A refresh alone triggers manifest generation, which
+        # is where the plugin substitutes - so the answer arrives before
+        # anything is written to the cluster. Sync by hand once the diff looks
+        # right.
+        syncOptions:
+          - CreateNamespace=true
