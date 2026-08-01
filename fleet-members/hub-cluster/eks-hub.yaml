@@ -29,3 +29,58 @@ credentials:
   # Resolved by the ArgoCD Harness Plugin at manifest generation. Created by
   # terraform; base64 of the Argo cluster config JSON (caData + bearerToken).
   configB64: "<+secrets.getValue('eks_hub_cluster_config')>"
+
+# ---------------------------------------------------------------------------
+# Agent bootstrap - read by charts/harness-gitops-agent-bootstrap.
+# The registration chart above ignores these keys and vice versa, so one file
+# describes the whole member.
+#
+# Two alphabets, on purpose: metadata.name / harnessName must be DNS-safe
+# (hyphens), while agentIdentifier is a HARNESS identifier (underscores). This
+# hub's own agent shows the pattern: CR hub-account-agent -> hub_account_agent.
+# ---------------------------------------------------------------------------
+harnessAgent:
+  enabled: true
+  metadata:
+    name: gitopsdemo-org-agent
+  spec:
+    name: gitopsdemo-org-agent
+    scope: ORG
+    apiKeySecretRef: gitopsdemo-api-key
+    # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
+    # hard-fails otherwise. Leave them out of step and gitops-helm creates its
+    # own Secret from a blank default: the agent runs with an empty token,
+    # never connects, and the CR reports failure for entirely the wrong reason.
+    tokenSecretRef: gitopsdemo-org-agent-token
+  apiKeySecret:
+    create: true
+    # hga-system, NOT this release namespace: controller chart 0.8.0 resolves
+    # an empty apiKeySecretNamespace to its OWN namespace. Keeping the key
+    # there also means it survives deletion of the agent namespace, which the
+    # finalizer needs to deregister the agent.
+    namespace: hga-system
+    value: "<+secrets.getValue('gitops-demo-admin')>"
+    keep: true
+
+gitopsAgent:
+  enabled: true
+  harness:
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    identity:
+      accountIdentifier: qIYsos1ZQO6fJMG1Ip6KJA
+      # Required at ORG scope. projectIdentifier is deliberately absent - the
+      # chart only requires it at PROJECT scope, and a non-empty value here
+      # would contradict the agent's scope.
+      orgIdentifier: gitopsdemo
+      agentIdentifier: gitopsdemo_org_agent
+    argocdHarnessPlugin:
+      enabled: true
+  agent:
+    harnessName: gitopsdemo-org-agent
+    existingSecrets:
+      agentToken: gitopsdemo-org-agent-token
+  argo-cd:
+    crds:
+      # This member has no Argo CD yet, so the runtime brings its own CRDs.
+      install: true
+      keep: true

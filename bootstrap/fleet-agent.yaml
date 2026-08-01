@@ -1,0 +1,73 @@
+# Installs the Harness GitOps agent onto every registered fleet MEMBER.
+#
+# SECOND of the two bootstrap ApplicationSets, and separate from
+# fleet-controller on purpose: that one ships the CRDs this chart's
+# HarnessGitopsAgent CR depends on. A single Application would race them and
+# the chart hard-fails when it loses. Split install, and the retry below
+# absorbs the gap until the CRDs exist.
+#
+# Plugin-rendered, unlike fleet-controller: the member file carries a
+# secrets.getValue expression for the Harness API key, and only the CMP can
+# resolve it. Expect the first manifest generation to fail with the generic
+# STATUS_CODE=500 warm-up - it clears on the next comparison. NOTE that
+# syncPolicy.retry does NOT cover that: retry governs sync operations, and the
+# warm-up fails during COMPARISON, so a refresh is what clears it.
+#
+# Values come from the member file, so one file per member describes both its
+# registration and its bootstrap.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: fleet-agent
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    # Removing a member must never tear the agent out from under it. Also note
+    # the agent CR carries a finalizer that deregisters it in Harness - losing
+    # the CR without the API key Secret strands a registered agent.
+    preserveResourcesOnDeletion: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: spoke
+  template:
+    metadata:
+      name: 'hga-agent-{{.name}}'
+      labels:
+        app.kubernetes.io/part-of: fleet-bootstrap
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        namespace: gitopsdemo-org-agent
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        targetRevision: HEAD
+        path: charts/harness-gitops-agent-bootstrap
+        plugin:
+          env:
+            - name: HELM_ARGS
+              # Path is RELATIVE to the chart dir; the whole repo is checked
+              # out, so ../../ climbs to the root. $values multi-source and
+              # helm.valuesObject are both invisible to a CMP - HELM_ARGS is
+              # the only way values reach a plugin-rendered chart.
+              #
+              # The hub folder is fixed here while there is one hub. With a
+              # second, it should come from an annotation on the cluster Secret
+              # rather than this literal.
+              value: >-
+                -f ../../fleet-members/hub-cluster/{{.name}}.yaml
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # No prune - see preserveResourcesOnDeletion above.
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
