@@ -1,0 +1,31 @@
+# EKS member of THIS hub.
+#
+# With a plugin source this file IS the chart's values file, so the keys here
+# are exactly charts/fleet-members-registration/values.yaml.
+#
+# NAMING: clusterName is how THIS hub knows the cluster, and it must not be
+# "hub-cluster" - that name and label already belong to this hub's own
+# self-registration. On the EKS side the same cluster legitimately calls itself
+# hub-cluster in its OWN Argo, because there it is a hub. Two Argo instances,
+# two namespaces of meaning, no collision.
+clusterName: eks-hub-cluster
+
+# From `tofu output cluster_endpoint` on the eks-hub workspace.
+server: REPLACE-ME
+
+environment: np
+tenant: control-plane
+
+# MUST NOT be hub-cluster: this hub's root ApplicationSet selects that label and
+# generates a STATICALLY named Application, so a second hub-labelled cluster
+# produces two Applications with one name and halts the appset that bootstraps
+# everything. The chart hard-fails the render if this is wrong.
+fleetMember: spoke
+
+project: default
+
+credentials:
+  enabled: true
+  # Resolved by the ArgoCD Harness Plugin at manifest generation. Created by
+  # terraform; base64 of the Argo cluster config JSON (caData + bearerToken).
+  configB64: "<+secrets.getValue('eks_hub_cluster_config')>"

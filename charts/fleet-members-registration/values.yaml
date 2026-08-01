@@ -1,0 +1,27 @@
+# One member = one values file, flat on purpose: with a plugin source the
+# member file IS this values file (a CMP never sees helm.valuesObject).
+#
+# Static values below so the chart renders standalone for local testing.
+
+clusterName: gitops-hub-cluster
+server: https://REPLACE-ME.gr7.eu-west-2.eks.amazonaws.com
+project: default
+
+# Fleet metadata. Mirrors the upstream fleet-secret mapping, where the ASM
+# blob's addons became LABELS and its metadata became ANNOTATIONS.
+# fleet_member must NOT be hub-cluster: the hub's root ApplicationSet selects
+# that label and its generated Application name is static, so a second
+# hub-labelled cluster produces two Applications with the same name and stops
+# the appset that bootstraps everything.
+fleetMember: spoke
+environment: dev
+tenant: control-plane
+labels: {}
+annotations: {}
+
+credentials:
+  enabled: true
+  # The ENTIRE Argo cluster config JSON, BASE64-encoded, held in one Harness
+  # secret and landed in data: (not stringData:). See templates/cluster-secret.yaml
+  # for why base64 is load-bearing rather than cosmetic.
+  configB64: "<+secrets.getValue('hub-secret')>"

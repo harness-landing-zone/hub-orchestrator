@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fleet-members-registration
+description: Registers ONE fleet member as an Argo CD cluster destination. Credentials arrive as a Harness secret expression resolved by the ArgoCD Harness Plugin at manifest generation.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

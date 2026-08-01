@@ -1,0 +1,76 @@
+# STAGED, NOT LIVE. bootstrap/ is synced flat with recurse:false and
+# exclude:"exclude/*", so nothing in here is applied by the root Application.
+# Promote when proven:  git mv bootstrap/exclude/fleet-members.yaml bootstrap/
+# Until then, hand-apply to test:
+#   kubectl --context hub -n hub-account-agent apply -f bootstrap/exclude/fleet-members.yaml
+#
+# Registers every file under fleet-members/<hub>/ as an Argo cluster
+# destination, so adding a member is adding ONE file.
+#
+# The matrix pairs this hub with the member files in its OWN folder, so a second
+# hub reads its own directory with no edit here. Never leave the clusters
+# selector empty - it matches every registered cluster, members included.
+#
+# Rendered through the ArgoCD Harness Plugin: the member file carries a
+# secrets.getValue expression for the credential half of the cluster config.
+# Values reach plugin-rendered helm ONLY via HELM_ARGS with a path RELATIVE to
+# the chart dir (../../ climbs to the repo root); $values multi-source and
+# helm.valuesObject are both invisible to a CMP.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: fleet-members
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    # Losing a destination strands every Application that targets it.
+    preserveResourcesOnDeletion: true
+  generators:
+    - matrix:
+        generators:
+          - clusters:
+              selector:
+                matchLabels:
+                  fleet_member: hub-cluster
+          - git:
+              repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+              revision: HEAD
+              files:
+                - path: 'fleet-members/{{.name}}/*.yaml'
+  template:
+    metadata:
+      name: 'fleet-member-{{.clusterName}}'
+      labels:
+        app.kubernetes.io/part-of: fleet-registration
+    spec:
+      project: default
+      destination:
+        # BY NAME, the hub matched above - a cluster name in the server field
+        # fails destination validation.
+        name: '{{.name}}'
+        namespace: hub-account-agent
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        targetRevision: HEAD
+        path: charts/fleet-members-registration
+        # Explicit plugin block: Argo never silently falls back to native helm,
+        # so a missing or failing CMP leaves the app in ComparisonError having
+        # applied nothing, rather than writing an unresolved expression into a
+        # cluster Secret.
+        plugin:
+          env:
+            - name: HELM_ARGS
+              value: >-
+                -f ../../{{.path.path}}/{{.path.filename}}
+      syncPolicy:
+        # Manual on purpose while proving this out. Refresh alone runs manifest
+        # generation, which is where the plugin substitutes, so the answer
+        # arrives before anything is written.
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100
+        syncOptions:
+          - ServerSideApply=true
