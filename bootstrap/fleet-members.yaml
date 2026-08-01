@@ -1,11 +1,9 @@
-# STAGED, NOT LIVE. bootstrap/ is synced flat with recurse:false and
-# exclude:"exclude/*", so nothing in here is applied by the root Application.
-# Promote when proven:  git mv bootstrap/exclude/fleet-members.yaml bootstrap/
-# Until then, hand-apply to test:
-#   kubectl --context hub -n hub-account-agent apply -f bootstrap/exclude/fleet-members.yaml
+# LIVE: synced onto each hub by the root Application (bootstrap/ is read flat,
+# recurse:false, exclude/* skipped).
 #
 # Registers every file under fleet-members/<hub>/ as an Argo cluster
-# destination, so adding a member is adding ONE file.
+# destination, so adding a member is adding ONE file - and removing one is
+# deliberately NOT enough to deregister it, see syncPolicy below.
 #
 # The matrix pairs this hub with the member files in its OWN folder, so a second
 # hub reads its own directory with no edit here. Never leave the clusters
@@ -65,9 +63,18 @@ spec:
               value: >-
                 -f ../../{{.path.path}}/{{.path.filename}}
       syncPolicy:
-        # Manual on purpose while proving this out. Refresh alone runs manifest
-        # generation, which is where the plugin substitutes, so the answer
-        # arrives before anything is written.
+        automated:
+          # selfHeal restores a hand-edited cluster Secret.
+          selfHeal: true
+          allowEmpty: true
+          # NO prune, deliberately. Removing a member file must not silently
+          # delete the destination and strand every Application targeting it.
+          # Deregistering is a manual act: delete the file, then delete the
+          # Secret once you are sure nothing points at it.
+        # The plugin's FIRST manifest generation for a new Application always
+        # fails with a generic STATUS_CODE=500 "failed to render expressions".
+        # It succeeds on the next attempt - this retry is what absorbs that
+        # warm-up, so registration completes without anyone touching it.
         retry:
           backoff:
             duration: 1m

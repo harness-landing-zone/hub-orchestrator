@@ -8,7 +8,7 @@
 # self-registration. On the EKS side the same cluster legitimately calls itself
 # hub-cluster in its OWN Argo, because there it is a hub. Two Argo instances,
 # two namespaces of meaning, no collision.
-clusterName: eks-hub-cluster
+clusterName: eks-hub
 
 # From `cluster_endpoint` output of the eks-hub workspace.
 server: https://C942DA83313920F0BFB4D7AF438A0046.gr7.eu-west-2.eks.amazonaws.com

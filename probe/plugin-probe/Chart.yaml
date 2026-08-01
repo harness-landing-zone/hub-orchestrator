@@ -1,6 +1,0 @@
-apiVersion: v2
-name: plugin-probe
-description: Throwaway probe - proves whether the ArgoCD Harness Plugin resolves secret expressions on this hub, and at which scope/backend.
-type: application
-version: 0.1.0
-appVersion: "0.1.0"
