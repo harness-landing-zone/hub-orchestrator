@@ -1,0 +1,82 @@
+# Pushes the HGA controller onto every registered fleet MEMBER.
+#
+# This is the management-plane half of the model: the controller's lifecycle on
+# a member belongs to THIS hub, permanently. The member is then free to run its
+# own agents and Applications for its own teams - it just never maintains its
+# own control-plane components.
+#
+# Targets by LABEL, not by a second list: a cluster becomes bootstrappable by
+# having been registered with fleet_member: spoke. fleet-members.yaml puts that
+# label on, this selects it. Never leave the selector empty - it would match
+# every registered cluster INCLUDING this hub, and push a second controller on
+# top of the one that runs the whole estate.
+#
+# Deliberately NOT the Harness plugin: an explicit helm: block bypasses CMP
+# discovery entirely, and nothing here is a secret. The plugin is only needed
+# where a secrets.getValue expression has to be resolved.
+#
+# Controller FIRST, agent second, as separate ApplicationSets on purpose. This
+# chart ships the CRDs; a HarnessGitopsAgent CR cannot apply until they exist,
+# and the bootstrap chart hard-fails when that race is lost. Splitting the
+# install is the documented way through it.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: fleet-controller
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    # Removing a member must not rip the controller out from under whatever it
+    # is managing there. Deprovisioning stays a deliberate, manual act.
+    preserveResourcesOnDeletion: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: spoke
+  template:
+    metadata:
+      name: 'hga-controller-{{.name}}'
+      labels:
+        app.kubernetes.io/part-of: fleet-bootstrap
+    spec:
+      project: default
+      destination:
+        # BY NAME - the member registered by fleet-members.
+        name: '{{.name}}'
+        namespace: hga-system
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        targetRevision: HEAD
+        path: charts/harness-gitops-agent-controller
+        helm:
+          releaseName: hga-controller
+          valuesObject:
+            crds:
+              # The CRDs the agent CR depends on. keep:true means they survive
+              # a helm uninstall - delete the CRs BEFORE the namespace or a
+              # finalizer can no longer reach its API key Secret and you strand
+              # a registered agent in Harness.
+              enabled: true
+              keep: true
+            manager:
+              # Empty resolves to the RELEASE namespace in chart 0.8.0 (it
+              # meant "each agent CR's own namespace" in 0.7.0 - the flip that
+              # broke a hub day-0). So the API key Secret must live in
+              # hga-system on the member, alongside the controller.
+              apiKeySecretNamespace: ""
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # No prune: see preserveResourcesOnDeletion above.
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100
+        syncOptions:
+          - CreateNamespace=true
+          # CRDs are large enough to blow the last-applied-configuration
+          # annotation limit under client-side apply.
+          - ServerSideApply=true
