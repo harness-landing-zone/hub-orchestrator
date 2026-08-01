@@ -84,3 +84,37 @@ gitopsAgent:
       # This member has no Argo CD yet, so the runtime brings its own CRDs.
       install: true
       keep: true
+
+# Maps this member's Argo AppProject to a Harness project, so Applications
+# filed under it appear in that project's GitOps view.
+#
+# Deliberately NOT using appProject.enabled: that template still carries
+# helm.sh/hook + hook-delete-policy: before-hook-creation (BUGS B15), and Argo
+# translates helm hooks into sync hooks - so EVERY sync would delete and
+# recreate the AppProject, and apps in it cannot be validated during the gap.
+# The controller's mapping reconciler ensures the AppProject exists anyway, so
+# a mapping entry alone gets us the object without the churn.
+projectMappings:
+  - name: platform-team
+    appProject: default
+    # ORG-scoped agent: projectId is required, and orgId must be omitted or
+    # match the agent's own org.
+    orgId: gitopsdemo
+    projectId: platformteam
+    autoCreateServiceEnv: false
+
+# The Argo AppProject the mapping above points at. Mirrors what the local hub
+# does in values/account-agent-day0.yaml.
+#
+# CAVEAT (BUGS B15): templates/appproject.yaml carries helm.sh/hook with
+# hook-delete-policy: before-hook-creation. Argo translates helm hooks into
+# sync hooks, so this object is DELETED AND RECREATED on every sync - not once
+# per deploy as it is under Harness CD. Harmless while nothing is filed under
+# the project; once Applications live here, each sync opens a window where they
+# cannot be validated. Proper fix is to drop the hook in the fork and let Argo
+# manage it as an ordinary resource, but that chart is shared with the hub's
+# day-0 so it needs its own change.
+appProject:
+  enabled: true
+  name: default
+  description: Default AppProject for the eks-hub member, mapped to gitopsdemo/platformteam
