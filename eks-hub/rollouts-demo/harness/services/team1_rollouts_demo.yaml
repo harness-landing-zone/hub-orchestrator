@@ -1,0 +1,45 @@
+# Harness SERVICE for the rollouts demo. Org gitopsdemo / project selfmanagedargo.
+#
+# NOT the repo-root harness/ folder: that one holds harness_controllers /
+# hub_orchistrator entities. This is a different org AND a different project, and
+# mixing them is how an entity ends up created in the wrong scope.
+#
+# ---------------------------------------------------------------------------
+# WHY IT IS ALMOST EMPTY, AND WHY THAT IS CORRECT
+# ---------------------------------------------------------------------------
+# serviceDefinition.spec is {} on purpose. A GitOps service carries no manifests
+# and no artifacts: the manifests live in Git and the AGENT applies them, so
+# there is nothing for Harness to fetch or push. What the service supplies is the
+# service/environment/cluster triple that the GitOps Rollout step needs in order
+# to resolve which Application it is acting on - "the service, environment, and
+# cluster must match what you configured in your GitOps Application" is a hard
+# requirement, not advice.
+#
+# Deliberately NO ReleaseRepo manifest. That manifest is what Update Release Repo
+# needs, and this pipeline uses UpdateGitOpsApp instead so it never needs a Git
+# connector with push rights and never raises a PR into this monorepo. The
+# trade-off (the desired image lives in the Application spec rather than in Git)
+# is recorded in ../../README.md.
+#
+# gitOpsEnabled: true is a ONE-WAY DOOR unless the CDS_GITOPS_MERGE_K8S_SERVICES
+# feature flag is on: without that flag the GitOps/CD choice is made at creation
+# time and cannot be changed afterwards. A CD-mode service here would offer
+# K8sRollingDeploy-style steps and none of the GitOps ones.
+service:
+  name: Team1 Rollouts Demo
+  identifier: team1_rollouts_demo
+  orgIdentifier: gitopsdemo
+  projectIdentifier: selfmanagedargo
+  description: >-
+    The rollouts-demo workload deployed into team1-dev through the TENANT's own
+    self-managed Argo CD (agent team1_argo_agent). Pairs with GitOps Application
+    team1-rollouts-demo; the pipeline that drives it is
+    ../pipelines/team1_rollouts_canary.yaml.
+  tags:
+    tier: tenant
+    tenant: team1
+    pattern: progressive-delivery
+  serviceDefinition:
+    type: Kubernetes
+    spec: {}
+  gitOpsEnabled: true

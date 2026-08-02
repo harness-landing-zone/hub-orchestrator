@@ -8,8 +8,8 @@ description: >-
   demonstrable. Nothing here may ever be applied by a tenant identity;
   Kubernetes escalation prevention enforces that.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - argo-cd
   - multi-tenancy

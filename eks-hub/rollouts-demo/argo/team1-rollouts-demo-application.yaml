@@ -1,0 +1,74 @@
+# The GitOps Application the pipeline drives. TENANT tier.
+#
+# Filed in team1-argo (the instance namespace, where Applications live) under
+# AppProject team1, which is the project mapped to Harness
+# gitopsdemo/selfmanagedargo. That mapping is what makes this app visible to the
+# pipeline as `team1-rollouts-demo` on agent `team1_argo_agent`.
+#
+# NOT APPLIED BY HAND. This directory is the source of
+# ../../applications/team1-rollouts-demo.yaml, which creates this object in
+# team1-argo at sync wave 2. Read that file before editing this one - it is what
+# keeps the parent from reverting the pipeline's image override, and it is
+# deliberately the ONLY Application in the chain without ServerSideApply.
+#
+# ---------------------------------------------------------------------------
+# THREE THINGS THAT ARE DELIBERATE
+# ---------------------------------------------------------------------------
+# 1. destination BY NAME, not by server. The tenant's argocd-cm sets
+#    cluster.inClusterEnabled: "false", so the implicit in-cluster destination
+#    does not exist. The only destination is the declared, restricted
+#    team1-in-cluster Secret (namespaces: team1-dev,team1-prod;
+#    clusterResources: "false"). AppProject team1 lists its destinations by that
+#    name too, so a server-form destination is rejected at admission.
+#
+# 2. NO syncPolicy.automated. The pipeline is the promoter. An automated sync
+#    would race the canary: it can re-sync mid-rollout and it makes the GitOps
+#    Sync step meaningless as a control point. Manual sync is the correct mode
+#    for pipeline-driven progressive delivery.
+#
+# 3. NO plain self-healing parent. The `UpdateGitOpsApp` step writes
+#    spec.source.kustomize.images onto THIS object, and a parent that selfHeals
+#    it reverts the override within seconds - green steps, green sync, old image
+#    still running. The parent that does manage it
+#    (../../applications/team1-rollouts-demo.yaml) is safe only because it
+#    declares /spec/source/kustomize and /spec/source/targetRevision in
+#    ignoreDifferences AND sets RespectIgnoreDifferences=true. Remove either and
+#    this breaks in exactly that silent way.
+#
+# PREREQUISITE, STILL OPEN: repoURL below is now listed in team1's AppProject
+# sourceRepos (../../tenants/team1/values.yaml), so admission passes - but this
+# repo is PRIVATE and the tenant's Argo has no credential for it. That is a
+# platform decision, not an edit to make silently: reusing the platform
+# bootstrap-repo credential hands the tenant read access to the whole monorepo
+# (risk R3 in ../../self-managed-argo-architecture.txt).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: team1-rollouts-demo
+  namespace: team1-argo
+  labels:
+    app.kubernetes.io/part-of: team1-rollouts-demo
+    team: team1
+spec:
+  project: team1
+  source:
+    repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+    targetRevision: main
+    path: eks-hub/rollouts-demo/app
+    # A kustomize stanza is present but empty: it declares the source type
+    # without pinning an image, leaving the pipeline's UpdateGitOpsApp step to
+    # fill in spec.source.kustomize.images. With no override, kustomization.yaml
+    # supplies the default tag.
+    kustomize: {}
+  destination:
+    name: team1-in-cluster
+    namespace: team1-dev
+  syncPolicy:
+    syncOptions:
+      # The Rollout is a CRD instance, not a CRD - it is small and a normal
+      # apply is fine. ServerSideApply is only mandatory for the argo-rollouts
+      # CRDs themselves, which the platform owns.
+      - CreateNamespace=false
+  # Keep a short history so `GitOpsRollback` (application-level, distinct from
+  # the rollout-level abort the pipeline uses) stays usable as a manual escape.
+  revisionHistoryLimit: 5

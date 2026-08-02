@@ -1,0 +1,35 @@
+# Harness ENVIRONMENT team1-prod. Org gitopsdemo / project selfmanagedargo.
+#
+# DECLARED, NOT YET USED. No pipeline stage targets it today - the canary
+# pipeline has one stage and it deploys to team1-dev. This file exists because
+# team1-prod is the second half of the tenant's contract
+# (workloadNamespaces in ../../../tenants/team1/values.yaml drives the Roles,
+# the cluster Secret allowlist and the AppProject destinations for BOTH), and an
+# environment that exists only in one of those places is how the two drift apart.
+#
+# BEFORE ANY STAGE CAN USE IT, three things are needed and none of them are in
+# this file:
+#   1. attach GitOps cluster `team1incluster` (agent team1_argo_agent) - the same
+#      restricted destination as team1-dev; the Secret's allowlist already covers
+#      both namespaces, so no new cluster entity is required
+#   2. a SECOND GitOps Application (team1-rollouts-demo-prod) with destination
+#      namespace team1-prod - the Rollout name may repeat, the Application name
+#      may not
+#   3. a second stage in ../pipelines/team1_rollouts_canary.yaml with the
+#      environmentRef, gitOpsClusters and appName swapped
+#
+# Production type deliberately, even in a POC: it makes any pipeline that treats
+# it as a convenient target visible as a policy decision rather than a typo.
+environment:
+  name: team1-prod
+  identifier: team1_prod
+  orgIdentifier: gitopsdemo
+  projectIdentifier: selfmanagedargo
+  description: >-
+    Tenant team1's production namespace, served by the tenant's OWN Argo CD
+    (agent team1_argo_agent, namespace team1-argo). Declared to match
+    workloadNamespaces in the tenant values file; no stage targets it yet.
+  type: Production
+  tags:
+    tier: tenant
+    tenant: team1

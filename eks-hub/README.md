@@ -15,7 +15,12 @@ read it first. It records what was proven live in the NatWest POC
 |---|---|
 | `charts/tenant-platform/` | The **platform-authored** half of a tenant: namespaces, the Roles that are the actual security wall, the restricted cluster Secret, and the AppProjects. Tenants never author any of this. |
 | `tenants/<team>/values.yaml` | One file per tenant. Adding a tenant is adding a file. |
-| `applications/` | The Argo Applications that deliver the two halves onto this cluster. |
+| `applications/` | The Argo Applications this hub's Argo reconciles. **Read flat** by `bootstrap/fleet-apps.yaml` — anything here is applied, subfolders are ignored. |
+| `rollouts-demo/` | Progressive-delivery demo for team1: workload manifests and Harness entities. Not applied directly; reached only through two Applications in `applications/`. |
+
+`applications/` is read as **one** parent Application, so `argocd.argoproj.io/sync-wave`
+orders its contents against each other. Current order: `argo-rollouts` (-1) →
+`team1-platform` (0) → `team1-instance` (1) → `team1-rollouts-demo` (2).
 
 ## The two halves, and why they are separate
 

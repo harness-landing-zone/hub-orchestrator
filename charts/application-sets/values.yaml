@@ -25,12 +25,47 @@ syncPolicyAppSet:
   preserveResourcesOnDeletion: true
 ackPodIdentity:
   path: "charts/pod-identity"
+# Name prefix for generated ApplicationSets AND the Applications they generate:
+#   <releaseName>-<cluster>-<component>-<version>
+#
+# REQUIRED IN PRACTICE. Left empty the name template renders a LEADING HYPHEN
+# ('-eks-hub-monitoring-87.19.2'), which is not a valid Kubernetes name, so
+# every Application is rejected. There was no default before.
+#
+# It doubles as the collision guard for branch testing: rendering a branch with
+# releaseName=test produces 'monitoring-test' ApplicationSets that cannot fight
+# the 'monitoring-default' ones already running.
+releaseName: default
+
+# Which catalogue files under values/ to load. Each key must match a FILE NAME:
+# mergeValues.monitoring.use=true reads values/monitoring.yaml.
+#
+# A name with no matching file renders NOTHING AT ALL, silently - a typo here
+# costs you the whole group with no error. See templates/_validate.tpl, which
+# turns that into a render failure.
+mergeValues: {}
+
 # If we Define the Merge we will use the values files included in the folder values. That will enable us to have default helm charts
+#
+# useSelectors "false" DROPS every component's own selector, so the per-addon
+# enable_<addon> gate stops applying and each addon installs on every cluster
+# globalSelectors matches. Set "true" whenever the catalogue uses enable_ gates.
 useSelectors: "false"
+# Only has an effect when a catalogue defines `releases:` (application-set.yaml
+# line ~109). No catalogue here does, so this currently adds nothing. It becomes
+# a silent no-match the day someone introduces release lanes without also
+# labelling every cluster Secret with the matching <group>Release label.
 useVersionSelectors: "true"
-# globalSelectors:
-#   fleet_member: spoke
-#   use_remote_argo: "true"
+
+# The cluster selector applied to EVERY generated ApplicationSet.
+#
+# NEVER leave this empty. With no globalSelectors the selector degrades to
+# `argocd.argoproj.io/secret-type: cluster` alone, which matches EVERY
+# registered cluster - spokes and tenant instances included - and installs
+# platform addons onto all of them. _validate.tpl refuses to render without it;
+# set allowUnscopedSelector: true to override deliberately.
+globalSelectors: {}
+allowUnscopedSelector: false
 # Default Values files that will apply to all applciationSets
 repoURLGit: '{{.metadata.annotations.addons_repo_url}}'
 repoURLGitRevision: '{{.metadata.annotations.addons_repo_revision}}'

@@ -40,6 +40,25 @@ deployableKinds:
   enabled: false
   rules: []
 
+# Let this tenant's argocd-server PATCH Rollouts in the workload namespaces.
+#
+# OFF by default: a tenant that does not run Argo Rollouts must not carry the
+# verb. On, it adds exactly patch on argoproj.io rollouts (+ /status) to the
+# <team>-argocd-server Role - in namespaces where the application-controller
+# already holds '*'/'*'/'*'. No ClusterRole, no new namespace.
+#
+# Turn it on when the tenant uses progressive delivery. Argo CD's Rollout
+# resource ACTIONS (resume / promote-full / abort / retry / restart, which are
+# what the Harness GitOps Rollout step invokes) execute inside argocd-server and
+# patch the object; the read-only server Role denies them. Symptom without it:
+# every WAIT passes and the first ACTION 403s.
+#
+# This grants nothing until the platform has installed argo-rollouts cluster-wide
+# (../../applications/argo-rollouts.yaml) - the CRDs are cluster-scoped and this
+# tenant holds zero ClusterRoles, by design.
+rolloutActions:
+  enabled: false
+
 # Neuter the permissive 'default' AppProject that Argo auto-creates in the
 # instance namespace. Hygiene, not a wall - the Roles are the wall - but it
 # turns a silent wrong-project deploy into an early clean error.

@@ -35,6 +35,20 @@ projectName: team1
 # rendering this Application through the plugin instead of plain helm.
 sourceRepos:
   - https://github.com/argoproj/argocd-example-apps.git
+  # This repo, for eks-hub/rollouts-demo/app ONLY - the source of the
+  # team1-rollouts-demo Application seeded by ../../applications/. AppProject
+  # sourceRepos is checked at ADMISSION, so without this entry the Application is
+  # rejected the moment it is created and the failure looks like a broken repo,
+  # not a policy decision.
+  #
+  # OPEN DECISION, NOT AN OVERSIGHT - this repo is PRIVATE and the tenant's Argo
+  # has no credential for it. Listing it here permits the source; it does not
+  # supply access. Do NOT close the gap by handing the tenant the platform's
+  # bootstrap-repo credential: that is read access to the entire monorepo and it
+  # is risk R3 in ../../self-managed-argo-architecture.txt. The clean answers are
+  # a dedicated demo repo or a repo-scoped deploy key registered as a Harness
+  # GitOps Repository in gitopsdemo/selfmanagedargo.
+  - https://github.com/harness-landing-zone/hub-orchestrator.git
 
 # Pod Security Admission - the dimension RBAC does not cover. RBAC bounds what
 # the controller may CREATE; PSA bounds what the resulting pods may DO.
@@ -48,6 +62,19 @@ namespaceLabels:
 deployableKinds:
   enabled: false
   rules: []
+
+# ON for this tenant - team1 runs the Argo Rollouts canary demo, and the Harness
+# GitOps Rollout step's actions (resume/abort) are executed by argocd-server,
+# which the base Role leaves read-only. Adds patch on argoproj.io rollouts
+# (+ /status) in team1-dev and team1-prod, nowhere else.
+#
+# Requires the platform addon in ../../applications/argo-rollouts.yaml - the CRDs
+# are cluster-scoped and this tenant cannot install them.
+#
+# If deployableKinds is ever switched on, its rules MUST include
+# argoproj.io/rollouts; the chart hard-fails the render otherwise.
+rolloutActions:
+  enabled: true
 
 lockDefaultProject: true
 

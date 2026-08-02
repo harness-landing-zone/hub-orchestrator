@@ -1,24 +1,46 @@
 apiVersion: v2
 name: application-sets
-description: A Helm chart for Kubernetes
-
-# A chart can be either an 'application' or a 'library' chart.
-#
-# Application charts are a collection of templates that can be packaged into versioned archives
-# to be deployed.
-#
-# Library charts provide useful utilities or functions for the chart developer. They're included as
-# a dependency of application charts to inject those utilities and functions into the rendering
-# pipeline. Library charts do not define any templates and therefore cannot be deployed.
+description: >-
+  Generates one Argo CD ApplicationSet per ENABLED entry in a values catalogue,
+  so a fleet addon becomes a values entry rather than a hand-written file.
+  Catalogues live in values/ and are pulled in by name through mergeValues.
 type: application
 
-# This is the chart version. This version number should be incremented each time you make changes
-# to the chart and its templates, including the app version.
-# Versions are expected to follow Semantic Versioning (https://semver.org/)
-version: 0.3.3
+# ---------------------------------------------------------------------------
+# VERSIONING - this is a FORK, and it owns its own lineage.
+#
+# Upstream is gitops-bridge-dev/gitops-bridge-helm-charts (charts/application-sets),
+# which numbers its own releases 0.x. This copy has diverged materially:
+# releaseName, globalValuesObject, templatePatch, applyNestedSelectors,
+# ignoreApplicationDifferences, preservedFields, strategy, and an explicit
+# tenant-aware valueFiles ladder replacing upstream's valuesFilePrefix.
+#
+# It previously carried version 0.3.3 - upstream's own number - which made
+# "which code is this?" unanswerable from the chart alone, and would collide
+# outright the moment upstream cut a 0.3.3 of its own. Starting at 1.0.0 makes
+# our lineage unambiguous and sorts correctly against any upstream tag.
+#
+# BUMP THIS ON EVERY CHANGE, including edits under values/. Those files are
+# compiled into the chart through $.Files.Get, so a catalogue edit changes what
+# renders just as much as a template edit does.
+# ---------------------------------------------------------------------------
+version: 1.0.0
 
-# This is the version number of the application being deployed. This version number should be
-# incremented each time you make changes to the application. Versions are not expected to
-# follow Semantic Versioning. They should reflect the version the application is using.
-# It is recommended to use it with quotes.
-appVersion: "1.16.0"
+# The generator has no separate "application" to track, so appVersion mirrors
+# the chart version. This is NOT cosmetic: _helpers.tpl stamps it as
+# app.kubernetes.io/version on every ApplicationSet AND on every Application
+# they generate. It previously read "1.16.0" - the `helm create` default -
+# labelling the entire fleet with a version that never existed.
+appVersion: "1.0.0"
+
+keywords:
+  - argo-cd
+  - applicationset
+  - gitops
+  - fleet
+
+annotations:
+  # Provenance, so the fork point stays recoverable without archaeology.
+  upstream.chart: gitops-bridge-dev/gitops-bridge-helm-charts
+  upstream.path: charts/application-sets
+  upstream.baseVersion: "0.3.3"

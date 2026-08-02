@@ -1,0 +1,43 @@
+# Harness ENVIRONMENT team1-dev. Org gitopsdemo / project selfmanagedargo.
+#
+# ---------------------------------------------------------------------------
+# THE CLUSTER IS NOT IN THIS FILE, AND IT CANNOT BE
+# ---------------------------------------------------------------------------
+# A GitOps environment is a deployment target that GitOps CLUSTERS are attached
+# to. The attachment is a separate GitOps entity created through the UI
+# (Environment > GitOps Clusters > + Cluster) or the GitOps API - it has no
+# representation inside environment YAML, so importing this file gives you an
+# environment with ZERO clusters and every stage that references it fails to
+# resolve one.
+#
+# For this tenant the cluster to attach is `team1incluster` on agent
+# `team1_argo_agent` - the Harness view of the RESTRICTED team1-in-cluster
+# Secret written by charts/tenant-platform (namespaces: team1-dev,team1-prod;
+# clusterResources: "false").
+#
+# CHECK WHAT HARNESS ACTUALLY LINKED. Harness can create a cluster entry of its
+# own rather than adopting the Secret already in the namespace, and an
+# unrestricted duplicate is a hole straight through WALL 2. It adopted ours -
+# keep it that way, and re-verify after any change to the tenant's Argo config.
+#
+# ---------------------------------------------------------------------------
+# NAMING
+# ---------------------------------------------------------------------------
+# name matches the KUBERNETES namespace (team1-dev) and identifier is the
+# underscore form Harness requires - the same two-alphabet split as
+# team1-argo-agent -> team1_argo_agent. Matching the namespace keeps <+env.name>
+# usable as a path segment if a PR-pipeline is ever added.
+environment:
+  name: team1-dev
+  identifier: team1_dev
+  orgIdentifier: gitopsdemo
+  projectIdentifier: selfmanagedargo
+  description: >-
+    Tenant team1's development namespace, served by the tenant's OWN Argo CD
+    (agent team1_argo_agent, namespace team1-argo). PreProduction: the tenant's
+    Argo is confined to team1-dev and team1-prod by namespaced Roles it cannot
+    author, and this is the half of that pair used for the canary demo.
+  type: PreProduction
+  tags:
+    tier: tenant
+    tenant: team1

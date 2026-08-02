@@ -73,6 +73,37 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["delete"]
+{{- if $top.Values.rolloutActions.enabled }}
+  # ROLLOUT ACTIONS - the one verb the read-only Role above cannot supply.
+  #
+  # Argo CD's resource actions for argoproj.io/Rollout (resume, promote-full,
+  # abort, retry, restart - exactly the Harness GitOps Rollout step's
+  # autoRolloutAction values) run in ARGOCD-SERVER, not in the
+  # application-controller: RunResourceActionV2 executes the Lua action and then
+  # patches the object using the DESTINATION cluster's rest.Config. Our
+  # destination is the credential-less {{ $top.Values.team }}-in-cluster Secret,
+  # so that config resolves to the in-cluster ServiceAccount of the process
+  # running the code - argocd-server. status FIRST: patchResource attempts the
+  # status subresource before the spec.
+  #
+  # The asymmetry is what makes this expensive to diagnose. Every rollout WAIT
+  # succeeds without it (waits read the application-controller's cached resource
+  # tree), so a pipeline gets all the way to Suspended/CanaryPauseStep and only
+  # then 403s on resume.
+  #
+  # patch is the whole delta - get is already covered by the wildcard read rule
+  # above and is repeated only so the grant reads as one intent. This stays
+  # strictly less than the application-controller Role beside it already holds
+  # in the same namespace ('*'/'*'/'*'): one API group, one resource plus its
+  # status subresource, no new namespace, nothing cluster-scoped. WALLS 1, 2 and
+  # 4 are unmoved.
+  #
+  # The rollouts CONTROLLER and its cluster-scoped CRDs are NOT installed here -
+  # they are a platform-tier addon, ../../applications/argo-rollouts.yaml.
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts", "rollouts/status"]
+    verbs: ["get", "patch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

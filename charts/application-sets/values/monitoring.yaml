@@ -1,66 +1,166 @@
-# Monitoring Addons
-cw-prometheus:
-  enabled: true
-  enableAckPodIdentity: false
-  namespace: '{{default "amazon-cloudwatch" (index .metadata.annotations "cw_prometheus_namespace")}}'
-  chartName: cw-prometheus
-  defaultVersion: "0.1.0"
-  path: 'charts/cw-prometheus'
-  selector:
-    matchExpressions:
-      - key: enable_cw_prometheus
-        operator: In
-        values: ['true']
+# ============================================================================
+# MONITORING GROUP - our catalogue, replacing the AWS one this chart shipped.
+#
+# Loaded by mergeValues.monitoring.use=true, which makes the chart read this
+# file from INSIDE itself ($.Files.Get). One entry here = one ApplicationSet,
+# generated for every cluster whose Secret carries the matching enable_ label.
+#
+# WHAT BELONGS IN THIS FILE vs THE LADDER
+# ---------------------------------------
+# Here: chart coordinates, destination, selector, sync policy, and values that
+# are true on EVERY cluster in the fleet.
+#
+# NOT here: anything sized to one cluster's hardware - resource requests,
+# storage class and volume size, retention, ingress hostnames, tolerations.
+# Those go in the per-cluster ladder, which resolves to
+#   <addons_repo_basepath>/<tenant>/environments/<env>/clusters/<cluster>/
+#     monitoring/kube-prometheus-stack/values.yaml
+# and is applied on top of what is here (last wins, and ignoreMissingValueFiles
+# is always on so a cluster with no overrides simply gets the defaults).
+#
+# The homelab hub's tuning is currently inline in bootstrap/monitoring.yaml and
+# is CPU/storage-sized to 3 worker VMs with local-path storage. It must move to
+# a ladder file, NOT into this catalogue - dropping it here would apply
+# homelab sizing to EKS.
+# ============================================================================
+
 kube-prometheus-stack:
   enabled: true
-  enableAckPodIdentity: false
-  namespace: '{{default "kube-prometheus-stack" (index .metadata.annotations "kube_prometheus_stack_namespace")}}'
+
   chartName: kube-prometheus-stack
   chartRepository: https://prometheus-community.github.io/helm-charts
-  defaultVersion: "56.21.0"
+  # Matches what the fleet runs today. The chart this replaced defaulted to
+  # 56.21.0, which is not a version anything here has ever run.
+  defaultVersion: "87.19.2"
+
+  # Overridable per cluster via annotation, defaulting to what we use.
+  namespace: '{{default "monitoring" (index .metadata.annotations "monitoring_namespace")}}'
+
+  # MUST stay kube-prometheus-stack. This is the live Helm release name on the
+  # homelab hub; changing it does not rename the release, it installs a SECOND
+  # copy alongside the first and leaves the original orphaned.
+  releaseName: kube-prometheus-stack
+
+  # Applied only when useSelectors is "true" (application-set.yaml:122).
+  # With it false the enable_ gate is dropped and this installs on every
+  # cluster the globalSelectors match - which is not what we want for an addon.
   selector:
     matchExpressions:
       - key: enable_kube_prometheus_stack
         operator: In
         values: ['true']
-cni-metrics-helper:
-  enabled: true
-  enableAckPodIdentity: false
-  namespace: "kube-system"
-  chartName: cni-metrics-helper
-  chartRepository: https://aws.github.io/eks-charts
-  defaultVersion: "1.18.5"
+
   valuesObject:
-    env:
-      AWS_CLUSTER_ID: '{{.metadata.annotations.aws_cluster_name}}'
-  selector:
-    matchExpressions:
-      - key: enable_cni_metrics_helper
-        operator: In
-        values: ['true']
-amp-prometheus:
-  enabled: false
-  enableAckPodIdentity: false
-  releaseName: amp-prometheus
-  namespace: '{{default "amp-prometheus" (index .metadata.annotations "amp_prometheus_namespace")}}'
-  chartName: prometheus
-  chartRepository: https://prometheus-community.github.io/helm-charts
-  defaultVersion: "27.3.1"
-  selector:
-    matchExpressions:
-      - key: enable_amp_prometheus
-        operator: In
-        values: ['true']
-  valuesObject:
-    serviceAccounts:
-      server:
-          name: '{{default "amp-prometheus-server-sa" (index .metadata.annotations "amp_prometheus_server_sa")}}'
-          annotations:
-            eks.amazonaws.com/role-arn: '{{default "" (index .metadata.annotations "amp_prometheus_iam_role_arn")}}'
-    server:
-      remoteWrite:
-        -
-          url: '{{(index .metadata.annotations "amp_endpoint_url")}}.api/v1/remote_write'
-          sigv4:
-              region: '{{.metadata.annotations.aws_region}}'
-              role_arn: '{{default "" (index .metadata.annotations "amp_prometheus_crossaccount_role")}}'
+    # ---- Fleet-wide truths only ---------------------------------------
+    # Nothing to route alerts to anywhere in the fleet yet, and it costs CPU
+    # and memory on every cluster. Turn on per-cluster from the ladder once
+    # there is a destination worth paging.
+    alertmanager:
+      enabled: false
+
+    prometheus:
+      prometheusSpec:
+        # Scrape ServiceMonitors/PodMonitors from ANY release, not just this
+        # chart's. Without these the stack silently ignores every ServiceMonitor
+        # it did not create itself - including the ones the GitOps agent and the
+        # HGA controller ship. True on every cluster, so it belongs here.
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        probeSelectorNilUsesHelmValues: false
+
+    kube-state-metrics:
+      # HGA controller CRD state -> Prometheus. Fleet-wide because every cluster
+      # that gets monitoring also runs the HGA controller.
+      #
+      # Since the CRD split, mappings are their own resource: hga_mapping_ready
+      # and hga_mapping_info read HarnessGitopsProjectMapping (one series per
+      # mapping CR), and hga_agent_healthy reads the Agent's Healthy condition
+      # that every mapping gates on. Without this an invalid CR is INVISIBLE to
+      # metrics - the controller counts terminal validation failures as
+      # reconcile successes, so only the condition carries the truth.
+      #
+      # A Healthy condition of Unknown (health unreadable) does not convert to a
+      # number, so hga_agent_healthy goes ABSENT rather than 0. Absence means
+      # unreadable; 0 means observed unhealthy.
+      #
+      # NOTE kube-state-metrics reads customResourceState ONLY at startup and
+      # the chart does not roll the pod when just this ConfigMap changes. After
+      # editing this block:
+      #   kubectl -n monitoring rollout restart \
+      #     deploy/kube-prometheus-stack-kube-state-metrics
+      rbac:
+        extraRules:
+          - apiGroups: ["infrastructure.kandylis.co.uk"]
+            resources: ["harnessgitopsagents", "harnessgitopsprojectmappings"]
+            verbs: ["list", "watch"]
+      customResourceState:
+        enabled: true
+        config:
+          kind: CustomResourceStateMetrics
+          spec:
+            resources:
+              - groupVersionKind:
+                  group: infrastructure.kandylis.co.uk
+                  version: v1
+                  kind: HarnessGitopsProjectMapping
+                metricNamePrefix: hga
+                labelsFromPath:
+                  name: [metadata, name]
+                  namespace: [metadata, namespace]
+                metrics:
+                  - name: mapping_ready
+                    help: Mapping Ready condition as a gauge (1 True, 0 False)
+                    each:
+                      type: Gauge
+                      gauge:
+                        path: [status, conditions, "[type=Ready]"]
+                        valueFrom: ["status"]
+                  - name: mapping_info
+                    help: Mapping identity and Ready reason as labels
+                    each:
+                      type: Info
+                      info:
+                        path: [status]
+                        labelsFromPath:
+                          reason: [conditions, "[type=Ready]", reason]
+                          agent_identifier: [remote, agent, identifier]
+                          mapping_id: [remote, mappingId]
+              - groupVersionKind:
+                  group: infrastructure.kandylis.co.uk
+                  version: v1
+                  kind: HarnessGitopsAgent
+                metricNamePrefix: hga
+                labelsFromPath:
+                  name: [metadata, name]
+                  namespace: [metadata, namespace]
+                metrics:
+                  - name: agent_healthy
+                    help: Agent Healthy condition as a gauge (1 True, 0 False; absent when Unknown)
+                    each:
+                      type: Gauge
+                      gauge:
+                        path: [status, conditions, "[type=Healthy]"]
+                        valueFrom: ["status"]
+
+  syncPolicy:
+    automated:
+      # selfHeal on: drift gets corrected, which is the point.
+      selfHeal: true
+      # prune OFF deliberately, fleet-wide. Storage classes with
+      # reclaimPolicy: Delete mean a pruned PVC destroys the TSDB. Removing a
+      # values entry must not be able to delete monitoring history.
+      prune: false
+    syncOptions:
+      - CreateNamespace=true
+      # REQUIRED. The prometheus-operator CRDs exceed the 262144-byte
+      # last-applied-configuration annotation limit, so a client-side apply
+      # fails with "metadata.annotations: Too long". This is the single most
+      # common way this chart fails under Argo.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m

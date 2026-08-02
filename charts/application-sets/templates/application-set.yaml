@@ -28,6 +28,12 @@
 {{- $_ := set $ "Values" $mergedValues -}}
 {{- end -}}
 
+{{- /* AFTER the merge, so component checks see the catalogue and not just the
+caller's overrides. This chart fails by rendering nothing rather than by
+erroring, so these guards are the difference between a typo being caught here
+and being discovered on a cluster. See _validate.tpl. */}}
+{{- include "application-sets.validate" . -}}
+
 {{- range $chartName, $chartConfig := .Values }}
 {{- $mergedValuesObject := dict }}
 {{- if and (kindIs "map" $chartConfig) (hasKey $chartConfig "enabled") }}
@@ -229,13 +235,13 @@ spec:
       syncPolicy:
         {{- toYaml $syncPolicy | nindent 8 }}
       {{- end }}
+      {{- /* Emitted ONCE. This block used to be duplicated verbatim below,
+      producing two `ignoreDifferences:` keys in the same mapping. Lenient
+      parsers take the last and move on, which is why it went unnoticed, but it
+      is a duplicate YAML key and a strict decoder rejects the document. */}}
       {{- with $chartConfig.ignoreDifferences }}
       ignoreDifferences:
         {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- if $chartConfig.ignoreDifferences}}
-      ignoreDifferences:
-        {{- $chartConfig.ignoreDifferences | toYaml | nindent 8 }}
       {{- end }}
 ---
 {{- end }}
