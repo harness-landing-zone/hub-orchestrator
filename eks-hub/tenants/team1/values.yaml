@@ -29,25 +29,26 @@ workloadNamespaces:
 # The Argo AppProject mapped to Harness gitopsdemo/selfmanagedargo below.
 projectName: team1
 
-# Public demo repo, deliberately: it needs no credential, so the first proof of
-# the lock has nothing to do with secret plumbing. Switching to the private
-# monorepo later means adding harnessAgent.gitSecret (split GitHub App form) and
-# rendering this Application through the plugin instead of plain helm.
+# The first entry is a public demo repo, deliberately: it needs no credential, so
+# the first proof of the lock had nothing to do with secret plumbing. The second
+# one does, and the credential for it is harnessAgent.gitSecret below.
+#
+# ADMISSION AND ACCESS ARE TWO DIFFERENT GATES, and this list is only the first.
+# sourceRepos is checked when an Application is CREATED; a repo missing from it
+# is rejected on admission and the failure reads like a broken repo rather than a
+# policy decision. Passing that gate still fetches nothing without a repository
+# Secret - see harnessAgent.gitSecret.
 sourceRepos:
   - https://github.com/argoproj/argocd-example-apps.git
   # This repo, for eks-hub/rollouts-demo/app ONLY - the source of the
-  # team1-rollouts-demo Application seeded by ../../applications/. AppProject
-  # sourceRepos is checked at ADMISSION, so without this entry the Application is
-  # rejected the moment it is created and the failure looks like a broken repo,
-  # not a policy decision.
+  # team1-rollouts-demo Application seeded by ../../applications/.
   #
-  # OPEN DECISION, NOT AN OVERSIGHT - this repo is PRIVATE and the tenant's Argo
-  # has no credential for it. Listing it here permits the source; it does not
-  # supply access. Do NOT close the gap by handing the tenant the platform's
-  # bootstrap-repo credential: that is read access to the entire monorepo and it
-  # is risk R3 in ../../self-managed-argo-architecture.txt. The clean answers are
-  # a dedicated demo repo or a repo-scoped deploy key registered as a Harness
-  # GitOps Repository in gitopsdemo/selfmanagedargo.
+  # DECIDED (was an open decision): the tenant gets a repository Secret for this
+  # repo, carrying the same GitHub App credential the member bootstrap uses, and
+  # scoped to AppProject team1. It is a POC monorepo, so the read access that
+  # grants - risk R3 in ../../self-managed-argo-architecture.txt - is accepted
+  # rather than designed around. See harnessAgent.gitSecret for what is and is
+  # not narrowed by that scoping.
   - https://github.com/harness-landing-zone/hub-orchestrator.git
 
 # Pod Security Admission - the dimension RBAC does not cover. RBAC bounds what
@@ -112,6 +113,76 @@ harnessAgent:
     # here would put an org-admin credential inside the tenant's namespace,
     # which is exactly what this model is trying to avoid.
     create: false
+  # Registers the monorepo as a repository in the TENANT's own Argo CD, so the
+  # team1-rollouts-demo Application can actually fetch eks-hub/rollouts-demo/app.
+  # Same chart template and same GitHub App credential as the member bootstrap in
+  # ../../../fleet-members/hub-cluster/eks-hub.yaml - read that file first, the
+  # reasoning below is the delta, not a restatement.
+  #
+  # THE DECISION THIS CLOSES. sourceRepos above lists this repo so admission
+  # passes; a repository Secret is what supplies ACCESS. Granting it means the
+  # tenant's Argo can read the whole hub-orchestrator monorepo - that is risk R3
+  # in ../../self-managed-argo-architecture.txt, accepted deliberately because
+  # this is a POC monorepo. It is not narrowed by anything below; the scoping
+  # here bounds WHICH Applications may use the credential, not what the
+  # credential can read. Move the demo manifests to their own repo and R3 goes
+  # away with them.
+  #
+  # THREE DELIBERATE DIFFERENCES FROM THE MEMBER BOOTSTRAP:
+  #
+  #   project: team1   The member registers at project: default. Here the
+  #                    repository is scoped to the TENANT's AppProject, so only
+  #                    Applications in team1 can use it - a second AppProject on
+  #                    this instance would not inherit the credential. It also
+  #                    makes the Harness agent file the Repository entity under
+  #                    the project mapped to AppProject team1
+  #                    (gitopsdemo/selfmanagedargo) rather than at org scope.
+  #
+  #   credsTemplate    OFF, and that is the half that matters. A repo-creds
+  #                    Secret is GLOBAL - never project-scoped - so rendering one
+  #                    would hand the same credential to every AppProject on this
+  #                    instance and undo the line above. The member needs it
+  #                    because its ApplicationSet git generators resolve
+  #                    credentials outside any AppProject; this tenant runs no
+  #                    ApplicationSet (rootAppSet is off), so it needs nothing.
+  #
+  #   name/repoName    Explicit. "bootstrap-repo" would be a lie in this
+  #                    namespace: nothing here bootstraps from it, it is a
+  #                    workload source. The Secret name is free-form (Argo
+  #                    matches on the label) and repoName is only the display
+  #                    name in the Argo and Harness UIs.
+  #
+  # The two ids are literals ON PURPOSE - they are not credentials (both appear
+  # in the GitHub App's own URL) and they land in stringData, which has no base64
+  # guard, so an unresolved expression there would be written verbatim and
+  # surface as an opaque GitHub auth failure. Only the key is secret, and it
+  # lands in data: where an unresolved expression is rejected outright. That is
+  # what makes the expression below fail LOUDLY if it does not resolve.
+  gitSecret:
+    create: true
+    name: hub-orchestrator-repo
+    repoName: hub-orchestrator
+    url: https://github.com/harness-landing-zone/hub-orchestrator.git
+    project: team1
+    credsTemplate: false
+    # QUOTED - an unquoted 7+ digit number renders in scientific notation and
+    # silently produces a wrong credential. The chart hard-fails on non-strings.
+    githubAppID: "2780955"
+    githubAppInstallationID: "107783082"
+    # Resolved by the ArgoCD Harness Plugin at manifest generation, which is why
+    # ../../applications/team1-instance.yaml had to move from a helm source to a
+    # plugin source. NOT githubAppJson: the plugin substitutes into helm's
+    # OUTPUT, so at template time the chart would still see the literal
+    # expression and fromJson would die with "not valid JSON".
+    #
+    # ACCOUNT-QUALIFIED, unlike the member file. That one is rendered by the
+    # hub's ACCOUNT-scoped agent, where the bare identifier resolves. This file
+    # is rendered by the EKS hub's ORG-scoped agent (gitopsdemo_org_agent), and
+    # a bare identifier there resolves against org gitopsdemo. Verify the
+    # secret's real scope before the first sync and drop the prefix if it is an
+    # org secret - the failure is loud (base64 decode error on the Secret), not
+    # silent.
+    githubAppPrivateKeyB64: "<+secrets.getValue('account.github_app_private_key_b64')>"
 
 gitopsAgent:
   enabled: true
