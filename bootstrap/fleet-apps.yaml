@@ -1,0 +1,79 @@
+# Seeds each fleet MEMBER's own app-of-apps folder.
+#
+# THIRD of the bootstrap ApplicationSets, and the handover point. The first two
+# push control-plane components onto a member and belong to this hub forever.
+# This one pushes a POINTER: one Application per member whose source is that
+# member's OWN folder in this repo. Everything inside that folder is then
+# reconciled by the MEMBER's Argo, not by this hub.
+#
+# So the hub decides WHICH folder a member reads, and the member decides what is
+# in it. That is the whole boundary, in one field.
+#
+# THE FOLDER IS THE MEMBER NAME. Member eks-hub reads eks-hub/applications/ -
+# the same convention as fleet-members/<hub>/<member>.yaml naming a member file
+# after the member. No extra config, and no way for two members to read each
+# other's folder by accident.
+#
+# Deliberately NOT the Harness plugin: this syncs plain Application manifests
+# and nothing here is a secret. A CMP would also go-template the Argo
+# placeholders inside those manifests, which is exactly the failure the explicit
+# directory source below avoids.
+#
+# THIRD, not first: the Application CRD arrives with the agent bundle
+# (fleet-agent), and the member's own Argo has to exist before anything it
+# creates gets reconciled. Syncing early is harmless - the retry below absorbs
+# the gap until the CRD is there.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: fleet-apps
+  namespace: hub-account-agent
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  syncPolicy:
+    # Losing this must never delete a member's Applications and, with them, the
+    # workloads they manage. Deprovisioning stays a deliberate, manual act.
+    preserveResourcesOnDeletion: true
+  generators:
+    - clusters:
+        selector:
+          # Never leave this empty - it would match every registered cluster
+          # INCLUDING this hub, and point the hub at its own folder.
+          matchLabels:
+            fleet_member: spoke
+  template:
+    metadata:
+      name: 'fleet-apps-{{.name}}'
+      labels:
+        app.kubernetes.io/part-of: fleet-bootstrap
+    spec:
+      project: default
+      destination:
+        # BY NAME - the member registered by fleet-members.
+        name: '{{.name}}'
+        # The member's agent namespace, where its Argo watches for Applications.
+        # Fixed while there is one member shape; with a second it should come
+        # from the member file rather than this literal, the same note that
+        # applies to fleet-agent.
+        namespace: gitopsdemo-org-agent
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        targetRevision: HEAD
+        path: '{{.name}}/applications'
+        directory:
+          # Flat read. Subfolders under applications/ are deliberately ignored,
+          # so a member can keep working files there without them being applied.
+          recurse: false
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # No prune: see preserveResourcesOnDeletion above. Removing an
+          # Application file should not silently tear down what it deployed.
+        retry:
+          backoff:
+            duration: 1m
+          limit: 100
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

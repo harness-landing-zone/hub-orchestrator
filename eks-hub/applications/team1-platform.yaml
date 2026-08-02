@@ -1,0 +1,44 @@
+# PLATFORM half of tenant team1 - namespaces, Roles, restricted destination,
+# AppProjects. Synced by the EKS hub's OWN Argo (the platform tier).
+#
+# Separate from the runtime Application on purpose: a tenant identity can apply
+# the runtime half with its own credentials but CANNOT apply this one -
+# Kubernetes escalation prevention rejects any Role granting permissions the
+# writer does not hold, and EKS access-policy grants are invisible to that
+# resolver. Keeping the halves apart is what makes that boundary demonstrable
+# rather than merely claimed.
+#
+# Wave 0: everything here must exist before the runtime lands.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: team1-platform
+  namespace: gitopsdemo-org-agent
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/part-of: tenant-platform
+    team: team1
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: team1-argo
+  source:
+    repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+    targetRevision: HEAD
+    path: eks-hub/charts/tenant-platform
+    helm:
+      valueFiles:
+        - ../../tenants/team1/values.yaml
+  syncPolicy:
+    automated:
+      # selfHeal restores a hand-edited Role or cluster Secret. This is the
+      # security wall - drift here is not a preference, it is a breach.
+      selfHeal: true
+      # Prune ON, unlike the fleet ApplicationSets: this chart owns its objects
+      # outright, and a Role that should have been removed but lingers is
+      # exactly the failure this whole model is meant to prevent.
+      prune: true
+    syncOptions:
+      - ServerSideApply=true

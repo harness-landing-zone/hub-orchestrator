@@ -1,0 +1,226 @@
+===============================================================================
+SELF-MANAGED ARGO CD ON THE EKS HUB  --  ARCHITECTURE AND BUILD STEPS
+===============================================================================
+Written 2026-08-02. Facts below marked [VERIFIED] were read out of the vendored
+chart (gitops-helm 1.2.7 / argo-cd 9.0.0) or the live cluster on this date.
+Anything marked [TEST] is a design intent that has NOT been proven yet.
+
+-------------------------------------------------------------------------------
+1. WHAT THIS PROVES
+-------------------------------------------------------------------------------
+Two tenancy patterns, side by side, on ONE cluster (the EKS hub):
+
+  PATTERN A - platform-managed   Harness project: platformmanagedapps
+    The platform team's existing ORG-scoped agent serves the tenant. No new
+    runtime. The tenant gets Applications and a Harness view, not an Argo.
+    Cost: one HarnessGitopsProjectMapping. Hours, not days.
+
+  PATTERN B - self-managed       Harness project: selfmanagedargo
+    The tenant gets their OWN Argo CD instance, provisioned FOR them by the
+    platform team. This document is about Pattern B.
+
+The distinction that makes Pattern B worth building is CONFINEMENT: the tenant's
+Argo must be able to act ONLY inside its own namespaces. An Argo that can reach
+the whole cluster is not a tenant instance, it is a second admin.
+
+-------------------------------------------------------------------------------
+2. WHAT ALREADY EXISTS AND IS REUSED
+-------------------------------------------------------------------------------
+The EKS hub already carries everything needed to bootstrap a second instance, so
+this pattern needs NO new API key and NO new controller: [VERIFIED live]
+
+  - HGA controller           running, cluster-scoped, watches all namespaces
+  - gitopsdemo-api-key       Secret in hga-system (ORG-scoped Harness key)
+  - Argo CRDs                installed cluster-wide by the FIRST instance
+                             (crds.install: true, crds.keep: true)
+  - bootstrap-repo           repo credential in gitopsdemo-org-agent
+  - gitopsdemo_org_agent     ORG-scoped agent, CONNECTED, Argo v2.14.9
+
+The controller resolves the API key from --api-key-secret-namespace (hga-system),
+NOT from the CR's namespace, so a HarnessGitopsAgent CR in team1-argo will
+authenticate without a key of its own.
+  [TEST] confirm the controller Deployment actually carries that flag on EKS
+  before relying on it - chart 0.8.0 changed what an empty value means.
+
+WHO FILES THE CR MATTERS. The platform team files it, from this folder. The
+tenant never touches the org-admin API key. That is the security model for this
+POC: confinement of the RUNTIME, not delegation of registration. If tenants are
+ever allowed to create their own HarnessGitopsAgent CRs, this model breaks -
+an org-admin key plus a tenant-writable CR means the tenant can register agents
+anywhere in the gitopsdemo org. Revisit with a per-tenant scoped key at that
+point.
+
+-------------------------------------------------------------------------------
+3. TARGET SHAPE
+-------------------------------------------------------------------------------
+  team1-argo    the tenant's Argo CD + Harness agent (the release namespace)
+  team1-dev     tenant workloads
+  team1-prod    tenant workloads
+
+  Applications live in team1-argo. Their DESTINATIONS are team1-dev and
+  team1-prod. There is no apps-in-any-namespace requirement, which keeps the
+  configuration smaller.
+
+  Harness side: agent registered at PROJECT scope -> gitopsdemo/selfmanagedargo.
+  PROJECT scope requires projectIdentifier to be set; the chart enforces this.
+
+Naming: team1 is a placeholder. Whatever replaces it must be DNS-safe
+(lowercase alphanumerics and hyphens) because it becomes namespace and Secret
+names, while the Harness agent identifier will be sanitised to underscores
+(team1-argo-agent -> team1_argo_agent), the same two-alphabet split already seen
+with gitopsdemo-org-agent.
+
+-------------------------------------------------------------------------------
+4. THE CRITICAL FINDING - THE CHART HAS NO NAMESPACED MODE
+-------------------------------------------------------------------------------
+This is the thing that will decide how much work this is. [VERIFIED by reading
+gitops-helm 1.2.7 templates]
+
+  harness.createClusterRoles   default: true
+
+  It gates ALL THREE ClusterRoles:
+      templates/argocd-application-controller/clusterrole.yaml
+      templates/argocd-repo-server/clusterrole.yaml
+      templates/gitops-agent/clusterrole.yaml
+
+  All three grant:      apiGroups: '*'   resources: '*'
+  That is cluster-admin equivalent. This is exactly what must not be handed to
+  a tenant.
+
+  Setting harness.createClusterRoles: false removes all three. But:
+
+      gitops-agent                 HAS a namespaced Role/RoleBinding template
+                                   (role.yaml, UNCONDITIONAL, scoped to the
+                                   release namespace) -- so the agent is fine.
+
+      argocd-application-controller   NO namespaced Role template exists
+      argocd-repo-server              NO namespaced Role template exists
+
+  So with createClusterRoles: false those two components get ZERO RBAC from the
+  chart. We must supply Roles and RoleBindings ourselves. There is no chart
+  switch that does this for us.
+
+  (Note: argo-cd.createClusterRoles is ALREADY false in gitops-helm's values -
+  Harness disabled the upstream subchart's RBAC and substituted its own
+  templates. Do not confuse the two keys; the one that matters is
+  harness.createClusterRoles.)
+
+-------------------------------------------------------------------------------
+5. TWO LAYERS OF ENFORCEMENT - BOTH ARE REQUIRED
+-------------------------------------------------------------------------------
+  LAYER 1  AppProject          Argo policy. Argo enforces it on itself.
+                               destinations, sourceRepos,
+                               clusterResourceWhitelist: [] (deny all
+                               cluster-scoped resources)
+
+  LAYER 2  Kubernetes RBAC     The real boundary. Roles + RoleBindings in
+                               team1-dev and team1-prod only.
+
+An AppProject alone is NOT security. It is configuration that Argo consults; if
+the controller's ServiceAccount holds a cluster-admin ClusterRole, anything that
+bypasses or misconfigures the AppProject has full cluster reach. RBAC is what
+makes over-reach impossible rather than merely disallowed. Build both, and test
+Layer 2 by deliberately trying to breach Layer 1.
+
+-------------------------------------------------------------------------------
+6. BUILD STEPS
+-------------------------------------------------------------------------------
+Everything below is delivered from this folder (eks-hub/) by the EKS hub's OWN
+Argo, which now has a repo credential. The homelab hub is not in this path.
+
+ STEP 1  Namespaces
+   team1-argo, team1-dev, team1-prod. Label them so the AppProject and any
+   NetworkPolicy can select them.
+
+ STEP 2  RBAC for the application-controller  [the real work]
+   In team1-dev and team1-prod, one Role + RoleBinding each, bound to the
+   application-controller ServiceAccount in team1-argo.
+   Start from the verbs Argo actually needs (get/list/watch/create/update/
+   patch/delete on the workload API groups) and NOT from '*'/'*'.
+   Deliberately omit: RBAC objects, ResourceQuota, LimitRange, and anything
+   cluster-scoped.
+
+ STEP 3  RBAC for the repo-server
+   Its ClusterRole is also '*'/'*' today. Determine what it genuinely needs -
+   the ArgoCD Harness Plugin reads Secrets/ConfigMaps during render, so this is
+   the component most likely to break under least-privilege.
+   [TEST] this is the highest-risk step. Expect iteration.
+
+ STEP 4  Values for the tenant bundle
+   harness.createClusterRoles: false        # drop the three cluster-admin roles
+   argo-cd.crds.install: false              # CRDs already exist cluster-wide
+   argo-cd.crds.keep:    true               # do not let an uninstall strip them
+   plus the standard agent block at PROJECT scope -> gitopsdemo/selfmanagedargo
+
+   crds.install: false is not optional. The first instance owns those CRDs; a
+   second install fights over them.
+
+ STEP 5  Restrict the destination
+   The in-cluster destination must not be the implicit unrestricted one. Define
+   the tenant's cluster/destination so it covers only team1-dev and team1-prod,
+   with cluster-scoped resources disabled.
+   [TEST] confirm how the Harness agent presents the in-cluster destination
+   before assuming a plain Argo cluster Secret is the lever here - Harness
+   manages clusters through its own API, so this may need to be expressed
+   Harness-side rather than as a raw Secret.
+
+ STEP 6  AppProject for the tenant
+   destinations: team1-dev, team1-prod on the in-cluster server only
+   clusterResourceWhitelist: []            # deny cluster-scoped outright
+   sourceRepos: the tenant's repo(s) only
+   Map it to gitopsdemo/selfmanagedargo via HarnessGitopsProjectMapping.
+   Do NOT use the bootstrap chart's appProject.enabled - that template still
+   carries helm.sh/hook with hook-delete-policy: before-hook-creation (BUGS
+   B15), and Argo turns helm hooks into sync hooks, so the AppProject would be
+   deleted and recreated on EVERY sync. The mapping reconciler creates the
+   AppProject anyway.
+
+ STEP 7  Version alignment
+   The existing instance runs Argo v2.14.9 (gitops-helm pins
+   docker.io/harness/argocd:v2.14.9 even though argo-cd chart 9.0.0 declares
+   appVersion v3.1.8). Both instances share ONE set of cluster-scoped CRDs
+   installed by whichever went first. Pin both instances to the same runtime
+   deliberately rather than discovering the skew later.
+
+ STEP 8  NetworkPolicy
+   harness.networkPolicy.create defaults to true. Decide whether the tenant's
+   namespaces also need policies restricting cross-tenant traffic - RBAC stops
+   the Argo controller acting on other namespaces, it does not stop tenant PODS
+   talking to them.
+
+-------------------------------------------------------------------------------
+7. HOW TO PROVE IT WORKED
+-------------------------------------------------------------------------------
+Positive tests - all must pass:
+   - agent team1_argo_agent CONNECTED at PROJECT scope in selfmanagedargo
+   - an Application in team1-argo deploys successfully into team1-dev
+   - the same into team1-prod
+
+Negative tests - these are the ones that actually prove confinement, and a POC
+that skips them has proven nothing:
+   - an Application targeting a namespace OUTSIDE team1-* must FAIL, and fail
+     on RBAC (Forbidden), not only on AppProject validation
+   - an Application containing a cluster-scoped resource (ClusterRole,
+     CustomResourceDefinition, Namespace) must FAIL
+   - kubectl auth can-i --as=system:serviceaccount:team1-argo:<controller-sa>
+     for a verb in a foreign namespace must return "no"
+
+Remember the diagnostic rule already paid for: Unauthorized means the credential
+was rejected; Forbidden means RBAC denied it. For these tests Forbidden is the
+PASS condition. And a refresh showing Synced proves nothing - it reads Argo's
+cluster cache. Only a real sync opens a live connection.
+
+-------------------------------------------------------------------------------
+8. OPEN QUESTIONS
+-------------------------------------------------------------------------------
+  Q1  Does the repo-server function under least-privilege RBAC, given the
+      Harness plugin reads Secrets during manifest generation? (STEP 3)
+  Q2  Is the in-cluster destination restrictable through Harness, or only via a
+      raw Argo cluster Secret the agent may overwrite? (STEP 5)
+  Q3  Does the tenant get its own repo credential, or reuse the platform one?
+      Reusing it hands the tenant read access to the whole monorepo.
+  Q4  Two Argo runtimes on one cluster: what is the resource cost, and does the
+      EKS node group have headroom?
+  Q5  When tenants are eventually allowed to self-serve registration, the
+      org-admin API key becomes the weak point. Per-tenant scoped key is the
+      answer, and it is out of scope for this POC by decision, not by oversight.

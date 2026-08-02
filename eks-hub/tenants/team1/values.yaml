@@ -1,0 +1,138 @@
+# Tenant: team1
+#
+# ONE file describes the whole tenant, consumed by TWO charts that ignore each
+# other's keys - the same pattern as fleet-members/hub-cluster/eks-hub.yaml:
+#
+#   charts/tenant-platform            the CONFINEMENT half (platform-applied)
+#   charts/harness-gitops-agent-bootstrap   the INSTANCE half (namespaced Argo
+#                                           + Harness agent)
+#
+# Onboarding a workload namespace later is one line in workloadNamespaces: it
+# extends the Roles AND the cluster Secret allowlist together, so they cannot
+# drift apart.
+
+# ---------------------------------------------------------------------------
+# charts/tenant-platform  -  the walls
+# ---------------------------------------------------------------------------
+team: team1
+
+# The instance namespace. Deliberately absent from workloadNamespaces below -
+# the platform owns the instance, and making it a deploy target would hand the
+# tenant write access to its own Argo CD's config and RBAC. The chart hard-fails
+# if it appears in both.
+argocdNamespace: team1-argo
+
+workloadNamespaces:
+  - team1-dev
+  - team1-prod
+
+# The Argo AppProject mapped to Harness gitopsdemo/selfmanagedargo below.
+projectName: team1
+
+# Public demo repo, deliberately: it needs no credential, so the first proof of
+# the lock has nothing to do with secret plumbing. Switching to the private
+# monorepo later means adding harnessAgent.gitSecret (split GitHub App form) and
+# rendering this Application through the plugin instead of plain helm.
+sourceRepos:
+  - https://github.com/argoproj/argocd-example-apps.git
+
+# Pod Security Admission - the dimension RBAC does not cover. RBAC bounds what
+# the controller may CREATE; PSA bounds what the resulting pods may DO.
+namespaceLabels:
+  pod-security.kubernetes.io/enforce: baseline
+  pod-security.kubernetes.io/audit: restricted
+  pod-security.kubernetes.io/warn: restricted
+
+# Second dial, off. The namespace is already the wall. Turning this on REQUIRES
+# setting resource.inclusions to the same list - see charts/tenant-platform.
+deployableKinds:
+  enabled: false
+  rules: []
+
+lockDefaultProject: true
+
+# ---------------------------------------------------------------------------
+# charts/harness-gitops-agent-bootstrap  -  the instance
+# ---------------------------------------------------------------------------
+harnessAgent:
+  enabled: true
+  metadata:
+    name: team1-argo-agent
+  spec:
+    name: team1-argo-agent
+    # PROJECT scope is what makes this the TENANT's agent rather than another
+    # platform one. projectIdentifier is required at this scope.
+    scope: PROJECT
+    orgId: gitopsdemo
+    projectId: selfmanagedargo
+    # Reuses the key the platform already placed in hga-system (keep: true) for
+    # the member bootstrap. The controller resolves it from
+    # --api-key-secret-namespace, NOT from the CR's namespace, so nothing needs
+    # to exist in team1-argo.
+    #
+    # NOTE this is an ORG-admin key. Safe here ONLY because the PLATFORM files
+    # this CR. If tenants are ever allowed to create their own
+    # HarnessGitopsAgent CRs, this becomes a per-tenant scoped key or the model
+    # breaks - see R2 in ../../self-managed-argo-architecture.txt.
+    apiKeySecretRef: gitopsdemo-api-key
+    # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
+    # hard-fails otherwise. Out of step and gitops-helm creates its own Secret
+    # from a blank default: the agent runs with an empty token, never connects,
+    # and reports failure for entirely the wrong reason.
+    tokenSecretRef: team1-argo-agent-token
+  apiKeySecret:
+    # The platform's key already exists in hga-system. Creating a second copy
+    # here would put an org-admin credential inside the tenant's namespace,
+    # which is exactly what this model is trying to avoid.
+    create: false
+
+gitopsAgent:
+  enabled: true
+  harness:
+    # THE namespaced switch. false drops the three '*'/'*' cluster-admin
+    # ClusterRoles (application-controller, repo-server, gitops-agent). The
+    # bundled argo-cd subchart still renders its namespaced Roles, so the
+    # instance is complete - verified: 6 Roles + 6 RoleBindings, 0 ClusterRoles.
+    createClusterRoles: false
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    identity:
+      accountIdentifier: qIYsos1ZQO6fJMG1Ip6KJA
+      orgIdentifier: gitopsdemo
+      # Required at PROJECT scope, and must match spec.projectId above.
+      projectIdentifier: selfmanagedargo
+      agentIdentifier: team1_argo_agent
+  agent:
+    harnessName: team1-argo-agent
+    existingSecrets:
+      agentToken: team1-argo-agent-token
+  argo-cd:
+    crds:
+      # The platform bundle owns the CRDs - they are cluster-scoped and shared
+      # with the platform instance. A tenant-driven CRD change would hit the
+      # platform too.
+      install: false
+      keep: true
+    configs:
+      cm:
+        # Disable the IMPLICIT in-cluster destination. Without this the
+        # restricted cluster Secret from tenant-platform is merely an extra
+        # option rather than a replacement, and the tenant could target the
+        # unrestricted built-in destination instead.
+        cluster.inClusterEnabled: "false"
+
+# Maps the tenant's Argo AppProject to their Harness project, so Applications
+# filed under it appear in that project's GitOps view.
+projectMappings:
+  - name: team1-selfmanaged
+    appProject: team1
+    orgId: gitopsdemo
+    projectId: selfmanagedargo
+    autoCreateServiceEnv: false
+
+# Deliberately OFF. That template still carries helm.sh/hook with
+# hook-delete-policy: before-hook-creation (BUGS B15), and Argo translates helm
+# hooks into sync hooks - so the AppProject would be DELETED AND RECREATED on
+# every sync, and Applications filed under it cannot be validated during the
+# gap. charts/tenant-platform provides both AppProjects as ordinary resources.
+appProject:
+  enabled: false

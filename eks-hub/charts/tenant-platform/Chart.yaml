@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tenant-platform
+description: >-
+  The PLATFORM-authored half of a self-managed Argo CD tenant: namespaces, the
+  namespaced Roles that are the real security wall, a restricted in-cluster
+  destination, and the AppProjects. Contains no workload - the tenant's Argo CD
+  runtime is a separate Application so the platform/tenant boundary stays
+  demonstrable. Nothing here may ever be applied by a tenant identity;
+  Kubernetes escalation prevention enforces that.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - argo-cd
+  - multi-tenancy
+  - rbac

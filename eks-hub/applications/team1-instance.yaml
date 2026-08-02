@@ -1,0 +1,58 @@
+# INSTANCE half of tenant team1 - the namespaced Argo CD plus the Harness agent
+# that wraps it. Synced by the EKS hub's OWN Argo (the platform tier).
+#
+# REUSES charts/harness-gitops-agent-bootstrap, the same chart the platform tier
+# runs. Nothing bespoke: three values in tenants/team1/values.yaml turn it into a
+# namespaced install -
+#   gitopsAgent.harness.createClusterRoles: false   -> 0 ClusterRoles
+#   gitopsAgent.argo-cd.crds.install:      false    -> platform owns the CRDs
+#   configs.cm.cluster.inClusterEnabled:  "false"   -> implicit destination off
+#
+# PLAIN HELM, NOT THE PLUGIN. This tenant needs no secret expression: the API key
+# already exists in hga-system (apiKeySecret.create: false) and the demo repo is
+# public. So there is no CMP in the path and therefore no first-generation
+# warm-up to absorb - unlike the fleet-agent ApplicationSet.
+#
+# Wave 1: team1-platform (wave 0) must have created team1-argo and the workload
+# namespaces first. The Roles it lays down in team1-dev/team1-prod are what this
+# instance's controller will use; without them it installs fine and then fails
+# every sync with Forbidden, which is the intended shape of the wall.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: team1-instance
+  namespace: gitopsdemo-org-agent
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    app.kubernetes.io/part-of: tenant-platform
+    team: team1
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: team1-argo
+  source:
+    repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+    targetRevision: HEAD
+    path: charts/harness-gitops-agent-bootstrap
+    helm:
+      releaseName: team1-argocd
+      valueFiles:
+        # Relative to the chart dir; the whole repo is checked out, so ../../
+        # climbs to the repo root.
+        - ../../eks-hub/tenants/team1/values.yaml
+  syncPolicy:
+    automated:
+      selfHeal: true
+      # No prune. The HarnessGitopsAgent CR carries a finalizer that deregisters
+      # the agent in Harness - losing the CR without the API key Secret strands
+      # a registered agent. Removing a tenant is a deliberate act.
+      prune: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      backoff:
+        duration: 1m
+      limit: 20

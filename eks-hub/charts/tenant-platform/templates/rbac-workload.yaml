@@ -1,0 +1,93 @@
+{{- include "tenant-platform.validate" . -}}
+{{- /*
+WALL 1 - the real security boundary.
+
+These are the ONLY permissions the tenant's Argo CD holds outside its own
+namespace. There are no ClusterRoles anywhere for this tenant, by design:
+
+  - a Role grants power only in its own namespace, and a RoleBinding is
+    namespace-local even when it references cluster-admin;
+  - cluster-wide power needs a ClusterRoleBinding, a cluster-scoped write no
+    tenant identity holds;
+  - Kubernetes escalation prevention means the tenant cannot author these Roles
+    themselves - the platform must apply them. That is why this file is in the
+    platform half.
+
+application-controller gets full control WITHIN each workload namespace: it
+applies whatever the tenant's manifests contain, and the namespace is the wall.
+Narrow it with deployableKinds only if you also set resource.inclusions - see
+values.yaml.
+
+server gets read + logs + pod delete, which is what the UI resource tree, log
+view and restart action need. Nothing more.
+*/}}
+{{- $top := . }}
+{{- range .Values.workloadNamespaces }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $top.Values.team }}-argocd-application-controller
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+rules:
+{{- if $top.Values.deployableKinds.enabled }}
+  {{- toYaml $top.Values.deployableKinds.rules | nindent 2 }}
+{{- else }}
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $top.Values.team }}-argocd-application-controller
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $top.Values.team }}-argocd-application-controller
+subjects:
+  - kind: ServiceAccount
+    name: argocd-application-controller
+    namespace: {{ $top.Values.argocdNamespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $top.Values.team }}-argocd-server
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Pod delete is the UI "restart" action. It is not a general write verb.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $top.Values.team }}-argocd-server
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $top.Values.team }}-argocd-server
+subjects:
+  - kind: ServiceAccount
+    name: argocd-server
+    namespace: {{ $top.Values.argocdNamespace | quote }}
+---
+{{- end }}

@@ -1,0 +1,51 @@
+# Defaults. Every tenant overrides these from tenants/<team>/values.yaml.
+# The chart hard-fails on anything it cannot safely default.
+
+# Tenant slug. DNS-safe (lowercase alphanumerics + hyphens) - it becomes
+# namespace, Role and Secret names. The Harness agent identifier derived from it
+# will be sanitised to underscores separately; the two alphabets do not mix.
+team: ""
+
+# Namespace hosting the tenant's own Argo CD instance.
+# Deliberately NOT a deploy target - see workloadNamespaces.
+argocdNamespace: ""
+
+# Where this tenant's Argo CD may deploy. This single list drives BOTH walls:
+#   - the Roles in rbac-workload.yaml (Kubernetes enforcement)
+#   - the namespaces allowlist in the cluster Secret (Argo enforcement)
+# so they can never drift apart. Onboarding a namespace = adding it here.
+#
+# The instance namespace must NOT appear here: the platform owns the instance,
+# and the controller's cache must be able to enumerate every listed namespace,
+# which needs the wildcard Role that exists only in workload namespaces.
+workloadNamespaces: []
+
+# Repos this tenant's AppProject may source from. Empty = deny all, which is a
+# safe default but means nothing syncs until it is set.
+sourceRepos: []
+
+# Argo AppProject name for the tenant. This is what gets mapped to the tenant's
+# Harness project.
+projectName: ""
+
+# Narrow the application-controller from '*' to an explicit list of kinds.
+# OFF by default: the namespace is already the wall, and this is a second dial.
+#
+# IF YOU ENABLE THIS you MUST also set resource.inclusions in the tenant's
+# argocd-cm to the same list and restart the controller. Argo's cluster cache
+# enumerates EVERY kind in its allowed namespaces and hard-fails the whole cache
+# on a 403. Keep the two lists in lockstep or the instance breaks in a way that
+# looks nothing like an RBAC problem.
+deployableKinds:
+  enabled: false
+  rules: []
+
+# Neuter the permissive 'default' AppProject that Argo auto-creates in the
+# instance namespace. Hygiene, not a wall - the Roles are the wall - but it
+# turns a silent wrong-project deploy into an early clean error.
+lockDefaultProject: true
+
+# Labels applied to the tenant namespaces. Pod Security Admission is the one
+# dimension RBAC does not cover: RBAC bounds what the CONTROLLER may create,
+# PSA bounds what the resulting PODS may do.
+namespaceLabels: {}
