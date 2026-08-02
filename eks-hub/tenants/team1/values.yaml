@@ -167,11 +167,48 @@ gitopsAgent:
       keep: true
     configs:
       cm:
-        # Disable the IMPLICIT in-cluster destination. Without this the
-        # restricted cluster Secret from tenant-platform is merely an extra
-        # option rather than a replacement, and the tenant could target the
-        # unrestricted built-in destination instead.
-        cluster.inClusterEnabled: "false"
+        # TRUE, and the "false" that used to be here did NOT do what the comment
+        # below it claimed. Argo identifies the in-cluster destination by SERVER
+        # ADDRESS, not by name - so cluster.inClusterEnabled: "false" disables
+        # EVERY cluster whose server is https://kubernetes.default.svc,
+        # including the explicitly declared, namespace-restricted
+        # team1-in-cluster Secret that tenant-platform creates. The declared
+        # Secret cannot be a "replacement" for the implicit destination: they are
+        # the same address, and the switch is address-based.
+        #
+        # Symptom when this was "false": the Secret exists and Harness even
+        # registers the cluster (team1incluster), but Argo's own resolver returns
+        # nothing, so anything targeting it fails with
+        #   "application destination spec is invalid: there are no clusters with
+        #    this name: team1-in-cluster"
+        # The ApplicationSet reports ParametersGenerated: True and then refuses
+        # to create the Applications - generation is fine, VALIDATION is not.
+        # Harness documents the same failure from the registration side:
+        # developer-hub .../gitops/resources/gitops-faqs.md - "cannot register
+        # cluster: in-cluster has been disabled" -> set this to 'true'.
+        #
+        # WHAT THIS COSTS. A second destination named `in-cluster` now exists,
+        # with no namespace allowlist. Confinement therefore rests on:
+        #   WALL 1 (Roles)      unchanged and absolute - zero ClusterRoles, Roles
+        #                       only in team1-dev/team1-prod, everything else
+        #                       403s at the Kubernetes API. Still the real
+        #                       boundary.
+        #   WALL 3 (AppProject) now load-bearing for THIS dimension: team1 lists
+        #                       destinations only as team1-in-cluster, so an
+        #                       Application naming `in-cluster` is refused at
+        #                       admission. It is no longer merely hygiene.
+        #   WALL 2 (the Secret) degraded to defence-in-depth - its namespaces
+        #                       allowlist now binds only apps that choose it.
+        #
+        # To get Wall 2 back as an INDEPENDENT wall, register the tenant's
+        # cluster under the real EKS API endpoint instead of the internal
+        # address, authenticating as the tenant's OWN
+        # argocd-application-controller ServiceAccount. Argo then treats it as a
+        # remote cluster and this flag stops applying to it. NEVER reuse the
+        # platform's cluster config for that - it carries platform credentials
+        # and would hand the tenant cluster-admin, far worse than the wall it
+        # restores. Tracked in ../../../BUGS-AND-IMPROVEMENTS.md.
+        cluster.inClusterEnabled: "true"
 
 # Maps the tenant's Argo AppProject to their Harness project, so Applications
 # filed under it appear in that project's GitOps view.
