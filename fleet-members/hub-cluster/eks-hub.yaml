@@ -61,6 +61,32 @@ harnessAgent:
     namespace: hga-system
     value: "<+secrets.getValue('gitops-demo-admin')>"
     keep: true
+  # Registers this monorepo in THIS member's own Argo CD, so the spoke can pull
+  # its own folder. Same repo as the hub, different consumer.
+  #
+  # NOT githubAppJson: this file is plugin-rendered, and the plugin substitutes
+  # into helm's OUTPUT - at template time the chart still sees the literal
+  # expression, so fromJson dies with "not valid JSON". The individual fields
+  # are passed through unparsed, so expressions survive to substitution.
+  #
+  # The two ids are literals ON PURPOSE. They are not credentials (both appear
+  # in the GitHub App's own URL) and they land in stringData, which has no
+  # base64 guard - an unresolved expression there is written verbatim and
+  # surfaces as an opaque GitHub auth failure. Only the key is a secret, and it
+  # lands in data: where an unresolved expression is rejected outright.
+  gitSecret:
+    create: true
+    url: https://github.com/harness-landing-zone/hub-orchestrator.git
+    project: default
+    # Global repo-creds companion: ApplicationSet git generators resolve
+    # credentials outside any AppProject, so without this they fetch the
+    # private repo anonymously and fail.
+    credsTemplate: true
+    # QUOTED - an unquoted 7+ digit number renders in scientific notation and
+    # silently produces a wrong credential. The chart hard-fails on non-strings.
+    githubAppID: "2780955"
+    githubAppInstallationID: "107783082"
+    githubAppPrivateKeyB64: "<+secrets.getValue('github_app_private_key_b64')>"
 
 gitopsAgent:
   enabled: true
