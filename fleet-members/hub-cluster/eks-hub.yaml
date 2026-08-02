@@ -90,6 +90,22 @@ harnessAgent:
 
 gitopsAgent:
   enabled: true
+  # PIN THE ARGO RUNTIME. gitops-helm 1.2.7 defaults to v2.14.9, whose bundled
+  # OpenAPI schema predates .status.terminatingReplicas (a Kubernetes 1.33+
+  # field on Deployment/ReplicaSet status). This cluster is Kubernetes 1.36, so
+  # every structured merge diff against a live Deployment fails with
+  #   error building typed value from live resource:
+  #   .status.terminatingReplicas: field not declared in schema
+  # and the Application never gets past comparison. It is not a sync failure and
+  # retry does not clear it.
+  #
+  # v3.3.10 is what the homelab hub already runs against the same agent version
+  # (v0.121.0), so this pairing is proven rather than assumed. Keep the two hubs
+  # on the same Argo version deliberately - drifting apart is how this class of
+  # bug reappears on whichever side is older.
+  global:
+    image:
+      tag: v3.3.10
   harness:
     gitopsServerHost: https://app.harness.io/prod1/gitops
     identity:

@@ -88,6 +88,18 @@ harnessAgent:
 
 gitopsAgent:
   enabled: true
+  # Same pin as the platform agent, for the same reason: gitops-helm 1.2.7
+  # defaults to Argo v2.14.9, whose schema predates .status.terminatingReplicas
+  # (Kubernetes 1.33+), and this cluster is 1.36. Left at the default, this
+  # tenant instance comes up fine and then fails COMPARISON on every workload it
+  # deploys into team1-dev / team1-prod.
+  #
+  # Keep this in step with fleet-members/hub-cluster/eks-hub.yaml. Both Argos on
+  # this cluster share one set of cluster-scoped CRDs, so letting them drift is
+  # how the tenant ends up reconciling against CRDs it does not agree with.
+  global:
+    image:
+      tag: v3.3.10
   harness:
     # THE namespaced switch. false drops the three '*'/'*' cluster-admin
     # ClusterRoles (application-controller, repo-server, gitops-agent). The
