@@ -8,37 +8,29 @@
 #   gitopsAgent.argo-cd.crds.install:      false    -> platform owns the CRDs
 #   configs.cm.cluster.inClusterEnabled:  "false"   -> implicit destination off
 #
-# PLUGIN-RENDERED, NOT PLAIN HELM - and it was plain helm until the tenant needed
-# a credential for the private monorepo. harnessAgent.gitSecret in the values file
-# carries a <+secrets.getValue(...)> expression for the GitHub App private key,
-# and ONLY the ArgoCD Harness Plugin resolves those. Left on a helm source the
-# expression is written to the Secret verbatim.
+# PLAIN HELM, NOT THE PLUGIN. This tenant needs no secret expression: the API key
+# already exists in hga-system (apiKeySecret.create: false) and the app team's
+# workload repo is public, so harnessAgent.gitSecret is gone from the values file.
+# Nothing in the rendered output contains <+secrets.getValue(...)> - verified by
+# rendering this chart with those values - so there is no CMP in the path and
+# therefore no first-generation warm-up to absorb, unlike bootstrap/fleet-agent.yaml.
 #
-# Three consequences, all of them already paid for elsewhere in this repo:
+# IT WAS BRIEFLY PLUGIN-RENDERED, and that is the whole reason this note exists.
+# A gitSecret carrying a GitHub App key for the PRIVATE monorepo forced a plugin
+# source, because ONLY the ArgoCD Harness Plugin resolves those expressions. The
+# EKS hub's CMP sidecar has neither helm nor argocd-harness-plugin on PATH, so
+# manifest generation failed outright with exit status 127 and this Application
+# never synced once. That is why team1_argo_agent was never registered and why
+# gitopsdemo/selfmanagedargo stayed completely empty - no agent, no clusters, no
+# services. One unrenderable Application, four missing layers downstream.
 #
-#   HELM_ARGS is the only channel. $values multi-source and helm.valuesObject are
-#   both invisible to a CMP, so the values file moves from spec.source.helm to the
-#   plugin env - same path, different transport. See bootstrap/fleet-agent.yaml,
-#   which renders this exact chart the same way.
-#
-#   The release name is no longer ours to set. A CMP has no releaseName field, so
-#   the release becomes the Application name (team1-instance) instead of
-#   team1-argocd. VERIFIED INERT: rendering the chart under both names differs
-#   only in app.kubernetes.io/instance labels and the config checksum annotations
-#   derived from them - no resource name, ServiceAccount or RoleBinding subject
-#   moves. That matters because charts/tenant-platform binds its Roles to LITERAL
-#   ServiceAccount names (argocd-application-controller, argocd-server), not to
-#   release-derived ones, so the wall does not shift when the release name does.
-#   Expect one re-label of every object in team1-argo on the first sync after this
-#   change.
-#
-#   The warm-up trap applies now. First manifest generation fails with
-#   STATUS_CODE=500 "failed to render expressions" until a refresh, and
-#   syncPolicy.retry does NOT cover it - retry governs sync operations and the
-#   warm-up fails during COMPARISON. This is the first plugin-rendered Application
-#   on the EKS hub's own Argo, so it is also the first proof that the CMP sidecar
-#   is actually up there (gitopsAgent.harness.argocdHarnessPlugin.enabled: true in
-#   fleet-members/hub-cluster/eks-hub.yaml).
+# Moving the workload to a public repo removes the credential, and with it the
+# only reason to be on a plugin source at all. KEEP IT THAT WAY: the moment any
+# value here needs <+secrets.getValue(...)>, this Application must move back to a
+# plugin source and inherits the warm-up trap - first generation fails with
+# STATUS_CODE=500 "failed to render expressions", and syncPolicy.retry does NOT
+# cover it, because retry governs sync operations while the warm-up fails during
+# COMPARISON.
 #
 # Wave 1: team1-platform (wave 0) must have created team1-argo and the workload
 # namespaces first. The Roles it lays down in team1-dev/team1-prod are what this
@@ -63,15 +55,14 @@ spec:
     repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
     targetRevision: HEAD
     path: charts/harness-gitops-agent-bootstrap
-    plugin:
-      env:
-        - name: HELM_ARGS
-          # Relative to the chart dir; the whole repo is checked out, so ../../
-          # climbs to the repo root. Same file the wave-0 team1-platform
-          # Application reads (as ../../tenants/team1/values.yaml from its own
-          # chart dir) - one file, two charts, neither reading the other's keys.
-          value: >-
-            -f ../../eks-hub/tenants/team1/values.yaml
+    helm:
+      releaseName: team1-argocd
+      valueFiles:
+        # Relative to the chart dir; the whole repo is checked out, so ../../
+        # climbs to the repo root. Same file the wave-0 team1-platform
+        # Application reads (as ../../tenants/team1/values.yaml from its own
+        # chart dir) - one file, two charts, neither reading the other's keys.
+        - ../../eks-hub/tenants/team1/values.yaml
   syncPolicy:
     automated:
       selfHeal: true
