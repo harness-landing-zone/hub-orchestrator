@@ -1,10 +1,35 @@
 # Common labels to be applied to all ApplicationSet-generated Applications and resources
+#
+# A BARE `managed-by` LABEL WAS REMOVED FROM HERE - DO NOT PUT IT BACK.
+#
+# These labels are handed to the ADDON's own chart as commonLabels, so they land
+# on every object that chart produces - and, for an operator-based addon, on the
+# custom resource the operator then reconciles. prometheus-operator selects its
+# own StatefulSets with `managed-by=prometheus-operator`. Setting a bare
+# `managed-by` here OVERWROTE that label, so the operator created the
+# StatefulSet and then could not see it through its own informer:
+#
+#   Prometheus/kube-prometheus-stack-prometheus
+#     Reconciled = True
+#     Available  = False   "shard 0: statefulset monitoring/prometheus-... not found"
+#
+# with the StatefulSet sitting Ready 1/1 the whole time. Prometheus ran fine;
+# the Application was permanently Degraded and could never go Healthy, which
+# also makes it useless as a gate for anything downstream.
+#
+# The lesson generalises beyond Prometheus: `managed-by` is a namespaced-label
+# convention (`app.kubernetes.io/managed-by`) precisely so tools do not collide
+# in the bare namespace. Anything we stamp fleet-wide must be prefixed, or it
+# will eventually clash with an operator that selects on it. Provenance is
+# already carried by the commonAnnotations below, where it cannot affect any
+# selector.
 globalValuesObject:
   commonLabels:
     app.kubernetes.io/part-of: "eks-fleet-management"
-    managed-by: "gitops-fleet-management"
     team: "platform"
   commonAnnotations:
+    # Annotation, not a label: annotations are never selectors, so this records
+    # provenance without the collision risk described above.
     managed-by: "gitops-fleet-management"
 
 syncPolicy:
