@@ -16,7 +16,7 @@ module "external_secrets_pod_identity" {
   # Still tightly scoped: this grants create only within the ARN patterns below,
   # which are all prefixed by this cluster's name. It is not blanket Secrets
   # Manager write across the account.
-  external_secrets_create_permission  = true
+  external_secrets_create_permission  = var.external_secrets_create_permission
   attach_external_secrets_policy      = true
   external_secrets_kms_key_arns       = ["arn:aws:kms:*:*:key/*"]
   external_secrets_ssm_parameter_arns = ["arn:aws:ssm:${local.region}:*:parameter/${module.eks.cluster_name}/*"]

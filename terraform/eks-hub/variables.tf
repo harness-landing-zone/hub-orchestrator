@@ -84,6 +84,21 @@ variable "aws_resources" {
   default     = {}
 }
 
+# Declared as a FLAT root variable rather than a key inside aws_resources
+# because Harness IaCM passes each workspace variable as its own `-var`, and an
+# object-typed variable cannot be set that way from a single workspace field.
+# Assigning it without this block fails the plan outright:
+#   Error: Value for undeclared variable ... assigned on the command line
+variable "external_secrets_create_permission" {
+  description = "Allow the External Secrets controller to CREATE secrets in Secrets Manager, not only read them. Required for PushSecret, which is how a credential generated in-cluster (a Grafana admin password, for example) is published so it survives a cluster rebuild. Scope is still limited to the cluster-prefixed ARNs in pod-identity.tf; this does not grant account-wide write."
+  type        = bool
+  # FALSE by default, matching the upstream module. The consequence is worth
+  # stating: remove the workspace variable and the permission silently goes
+  # away, PushSecret starts failing AccessDenied, and the symptom surfaces in
+  # external-secrets rather than anywhere near terraform.
+  default = false
+}
+
 variable "environment" {
   description = "The environment of the Hub cluster"
   type        = string
