@@ -1,73 +1,76 @@
 # ============================================================================
 # addon-secrets
 #
-# THE PROBLEM THIS SOLVES, stated plainly because the design looks
-# over-engineered until you see it: Grafana (and anything like it) regenerates
-# its admin password on every helm render unless the password is supplied. That
-# makes the Argo Application permanently OutOfSync and, with selfHeal on,
-# rotates the credential on every pass.
+# A ClusterSecretStore, plus per-addon ExternalSecrets that READ credentials
+# from AWS Secrets Manager. Nothing more.
 #
-# Supplying a fixed password means putting one somewhere. The requirement is
-# that it is generated (never written in git) AND survives a cluster rebuild.
-# Those two together are what force the three-resource shape below.
+# WHY THIS IS READ-ONLY, having briefly not been
+# ----------------------------------------------
+# The first version generated the password in-cluster (Password generator ->
+# seed ExternalSecret -> PushSecret -> consuming ExternalSecret), so the value
+# never had to be created by hand. Four resources to avoid one manual step.
 #
-# THE FLOW - and why it is not simpler:
+# It does not work: external-secrets v2.8.0 sends `AddReplicaRegions: []` on
+# CreateSecret and AWS rejects empty arrays with
 #
-#   1. Password generator            makes a random value in-cluster
-#   2. seed ExternalSecret           materialises it once (refreshInterval "0")
-#   3. PushSecret updatePolicy       writes it to Secrets Manager ONLY IF the
-#      IfNotExists                   remote secret does not already exist
-#   4. consuming ExternalSecret      reads Secrets Manager and produces the
-#                                    Secret the addon actually mounts
+#   ValidationException: Value '[]' at 'addReplicaRegions' failed to satisfy
+#   constraint: Member must have length greater than or equal to 1
 #
-# On a REBUILD step 1 generates a different value, but step 3 refuses to
-# overwrite, so step 4 reads the ORIGINAL back from AWS. The regenerated seed is
-# simply unused. That is what makes it durable, and it is why the seed and the
-# consumed Secret are two different objects rather than one.
+# No CRD field suppresses it - checked both the ClusterSecretStore provider
+# schema (only forceDeleteWithoutRecovery / recoveryWindowInDays) and the
+# PushSecret remoteRef schema (only property / remoteKey). See BUGS B25.
 #
-# A single ExternalSecret from the generator would be simpler and would rotate
-# the password on every cluster rebuild - which is exactly the failure being
-# fixed, just moved.
+# The bug only affects CREATE. Once the remote secret exists ESO uses
+# PutSecretValue, which is fine. So the whole generate-and-push apparatus only
+# ever bought the FIRST write - and it is the first write that is broken.
+#
+# Deleting it removes three resources per credential and one upstream defect
+# from the critical path. The secret is created once, out of band; everything
+# after that is a plain read. Restore generation only if ESO fixes CreateSecret
+# AND the manual step is genuinely costing something.
 # ============================================================================
 
 # ---- ClusterSecretStore -----------------------------------------------------
-# Cluster-scoped on purpose: the consuming ExternalSecrets live in whichever
-# namespace their addon does (monitoring, ...), and a namespaced SecretStore
-# would need one copy per namespace.
+# Cluster-scoped on purpose: consuming ExternalSecrets live in whichever
+# namespace their addon does, and a namespaced SecretStore would need one copy
+# per namespace.
 #
-# No `role:` is set. Authentication is EKS Pod Identity, associated to
+# No `role:`. Authentication is EKS Pod Identity, associated to
 # (external-secrets, external-secrets-sa) on the AWS side, so the controller
-# already holds credentials and nothing needs to assume a role here. Setting
-# `role` would make ESO attempt a sts:AssumeRole it has no need for.
+# already holds credentials from the default chain. Setting `role` makes ESO
+# attempt an sts:AssumeRole it does not need.
 secretStore:
   enabled: false
   kind: ClusterSecretStore
   name: aws-secrets-manager
   region: ""
 
-# ---- Generated credentials --------------------------------------------------
-# A map, so one release can own several. Key is the logical name.
+# ---- Credentials read from Secrets Manager ---------------------------------
+# A map so one release can own several.
 #
 # remoteKey follows the agreed convention <cluster>/<addon>/<key>, which sits
-# inside the IAM scope terraform already grants
-# (arn:aws:secretsmanager:<region>:*:secret:<cluster>/*). A path outside that
-# prefix will fail with AccessDenied, not with anything mentioning paths.
-generatedSecrets: {}
+# inside the IAM scope terraform grants
+# (arn:aws:secretsmanager:<region>:*:secret:<cluster>/*). A key outside that
+# prefix fails AccessDenied, with nothing in the error mentioning paths.
+#
+# THE CLUSTER IN THAT PATH IS THE **AWS** CLUSTER NAME, which is not always the
+# Argo destination name - on this fleet they differ (hub-cluster vs eks-hub).
+externalSecrets: {}
 # grafana-admin:
 #   enabled: true
 #   namespace: monitoring
-#   # The Secret the addon mounts. For Grafana this is what
-#   # grafana.admin.existingSecret points at.
+#   # The Secret the addon mounts - what grafana.admin.existingSecret points at.
 #   targetName: grafana-admin
 #   remoteKey: "hub-cluster/grafana/admin"
-#   # Key inside the remote secret, and inside the produced Secret.
-#   passwordKey: admin-password
-#   length: 24
-#   # Non-secret values merged in alongside the fetched password. Grafana needs
-#   # admin-user next to admin-password in the same Secret.
+#   # Keys to pull out of the remote secret. secretKey is the key in the
+#   # produced Kubernetes Secret; property is the field inside the remote JSON.
+#   data:
+#     - secretKey: admin-password
+#       property: admin-password
+#   # Non-secret values merged in alongside. Grafana needs admin-user next to
+#   # admin-password in the SAME Secret.
 #   literals:
 #     admin-user: admin
 
-# How often the CONSUMING ExternalSecret re-reads Secrets Manager. The seed is
-# always refreshInterval "0" (generate once, never again) regardless of this.
+# How often to re-read Secrets Manager.
 refreshInterval: 1h
