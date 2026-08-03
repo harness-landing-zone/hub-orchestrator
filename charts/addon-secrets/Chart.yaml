@@ -1,0 +1,19 @@
+apiVersion: v2
+name: addon-secrets
+description: >-
+  Generic External Secrets resources for platform addons: a ClusterSecretStore,
+  and per-addon credentials that are GENERATED in-cluster once, pushed to AWS
+  Secrets Manager, and thereafter read back from there so they survive a
+  cluster rebuild.
+
+  Deliberately separate from charts/fleet-secret, whose ExternalSecret template
+  is hard-wired to emit an Argo CLUSTER Secret (it stamps
+  argocd.argoproj.io/secret-type: cluster and templates config/name/server).
+  That chart cannot express an ordinary credential, and widening it would make
+  a fleet-registration chart do two unrelated jobs.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - external-secrets
+  - secrets

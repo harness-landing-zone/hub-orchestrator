@@ -8,7 +8,15 @@ module "external_secrets_pod_identity" {
 
   name = "external-secrets"
 
-  external_secrets_create_permission  = false
+  # TRUE so the controller can CREATE secrets in Secrets Manager, not only read
+  # them. Needed for PushSecret - the direction where a secret is generated in
+  # the cluster (a Grafana admin password, for example) and pushed to Secrets
+  # Manager so it survives a cluster rebuild. Reading alone cannot do that.
+  #
+  # Still tightly scoped: this grants create only within the ARN patterns below,
+  # which are all prefixed by this cluster's name. It is not blanket Secrets
+  # Manager write across the account.
+  external_secrets_create_permission  = true
   attach_external_secrets_policy      = true
   external_secrets_kms_key_arns       = ["arn:aws:kms:*:*:key/*"]
   external_secrets_ssm_parameter_arns = ["arn:aws:ssm:${local.region}:*:parameter/${module.eks.cluster_name}/*"]

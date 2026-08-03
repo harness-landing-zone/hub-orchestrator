@@ -1,0 +1,73 @@
+# ============================================================================
+# addon-secrets
+#
+# THE PROBLEM THIS SOLVES, stated plainly because the design looks
+# over-engineered until you see it: Grafana (and anything like it) regenerates
+# its admin password on every helm render unless the password is supplied. That
+# makes the Argo Application permanently OutOfSync and, with selfHeal on,
+# rotates the credential on every pass.
+#
+# Supplying a fixed password means putting one somewhere. The requirement is
+# that it is generated (never written in git) AND survives a cluster rebuild.
+# Those two together are what force the three-resource shape below.
+#
+# THE FLOW - and why it is not simpler:
+#
+#   1. Password generator            makes a random value in-cluster
+#   2. seed ExternalSecret           materialises it once (refreshInterval "0")
+#   3. PushSecret updatePolicy       writes it to Secrets Manager ONLY IF the
+#      IfNotExists                   remote secret does not already exist
+#   4. consuming ExternalSecret      reads Secrets Manager and produces the
+#                                    Secret the addon actually mounts
+#
+# On a REBUILD step 1 generates a different value, but step 3 refuses to
+# overwrite, so step 4 reads the ORIGINAL back from AWS. The regenerated seed is
+# simply unused. That is what makes it durable, and it is why the seed and the
+# consumed Secret are two different objects rather than one.
+#
+# A single ExternalSecret from the generator would be simpler and would rotate
+# the password on every cluster rebuild - which is exactly the failure being
+# fixed, just moved.
+# ============================================================================
+
+# ---- ClusterSecretStore -----------------------------------------------------
+# Cluster-scoped on purpose: the consuming ExternalSecrets live in whichever
+# namespace their addon does (monitoring, ...), and a namespaced SecretStore
+# would need one copy per namespace.
+#
+# No `role:` is set. Authentication is EKS Pod Identity, associated to
+# (external-secrets, external-secrets-sa) on the AWS side, so the controller
+# already holds credentials and nothing needs to assume a role here. Setting
+# `role` would make ESO attempt a sts:AssumeRole it has no need for.
+secretStore:
+  enabled: false
+  kind: ClusterSecretStore
+  name: aws-secrets-manager
+  region: ""
+
+# ---- Generated credentials --------------------------------------------------
+# A map, so one release can own several. Key is the logical name.
+#
+# remoteKey follows the agreed convention <cluster>/<addon>/<key>, which sits
+# inside the IAM scope terraform already grants
+# (arn:aws:secretsmanager:<region>:*:secret:<cluster>/*). A path outside that
+# prefix will fail with AccessDenied, not with anything mentioning paths.
+generatedSecrets: {}
+# grafana-admin:
+#   enabled: true
+#   namespace: monitoring
+#   # The Secret the addon mounts. For Grafana this is what
+#   # grafana.admin.existingSecret points at.
+#   targetName: grafana-admin
+#   remoteKey: "hub-cluster/grafana/admin"
+#   # Key inside the remote secret, and inside the produced Secret.
+#   passwordKey: admin-password
+#   length: 24
+#   # Non-secret values merged in alongside the fetched password. Grafana needs
+#   # admin-user next to admin-password in the same Secret.
+#   literals:
+#     admin-user: admin
+
+# How often the CONSUMING ExternalSecret re-reads Secrets Manager. The seed is
+# always refreshInterval "0" (generate once, never again) regardless of this.
+refreshInterval: 1h

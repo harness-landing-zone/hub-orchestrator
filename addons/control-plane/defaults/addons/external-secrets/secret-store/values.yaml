@@ -1,0 +1,28 @@
+# Ladder rung 1 - the fleet ClusterSecretStore, rendered by charts/addon-secrets
+# as an ADDITIONAL RESOURCE of the external-secrets component.
+#
+# Resolved path:
+#   $values/addons/control-plane/defaults/addons/external-secrets/secret-store/values.yaml
+#                                          ^chartName        ^additionalResources.type
+#
+# The trailing 'secret-store' segment comes from `type:` in the catalogue entry.
+# It is what lets one chart be rendered from several folders with different
+# values - the controller's own values live one level up in this same tree.
+
+secretStore:
+  enabled: true
+  # Cluster-scoped: consuming ExternalSecrets live in their addon's namespace
+  # (monitoring, ...), and a namespaced SecretStore would need a copy in each.
+  kind: ClusterSecretStore
+  name: aws-secrets-manager
+  # Every cluster in this tenant is in eu-west-2 today. It is a per-cluster fact
+  # in principle, so override it in a cluster rung rather than editing here if
+  # that ever stops being true. An empty region fails the render on purpose -
+  # at runtime it would surface as an opaque AWS SDK error instead.
+  region: eu-west-2
+
+# No generatedSecrets in this rung. The store is fleet infrastructure; the
+# credentials that use it belong to the addons that need them, so they are
+# declared in that addon's own additionalResources (see kube-prometheus-stack's
+# grafana-admin entry in the monitoring catalogue).
+generatedSecrets: {}

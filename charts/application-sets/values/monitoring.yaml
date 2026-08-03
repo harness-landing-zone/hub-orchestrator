@@ -27,6 +27,29 @@
 kube-prometheus-stack:
   enabled: true
 
+  # The Grafana admin credential, rendered by charts/addon-secrets.
+  #
+  # WHY IT LIVES ON THIS COMPONENT rather than with external-secrets: it is a
+  # monitoring credential, it must land in the monitoring NAMESPACE, and its
+  # lifecycle is the stack's. external-secrets owns the ClusterSecretStore it
+  # resolves against - the controller, not the credentials that use it.
+  #
+  # This is why Grafana can stop regenerating its password on every render: with
+  # grafana.admin.existingSecret pointed at the Secret produced here (set in the
+  # ladder, not in valuesObject), the chart stops minting a new one and the
+  # Application stops being permanently OutOfSync.
+  #
+  # Depends on external-secrets being installed - a cross-GROUP dependency, and
+  # deliberately not modelled as one. If the addons group has not run, these
+  # resources fail to apply because their CRDs do not exist, and they converge
+  # on retry once it has. Ordering across groups is not something this chart
+  # expresses.
+  additionalResources:
+    - path: charts/addon-secrets
+      type: grafana-admin
+      helm:
+        releaseName: grafana-admin
+
   chartName: kube-prometheus-stack
   chartRepository: https://prometheus-community.github.io/helm-charts
   # Matches what the fleet runs today. The chart this replaced defaulted to

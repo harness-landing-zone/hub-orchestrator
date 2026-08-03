@@ -59,6 +59,14 @@ deployableKinds:
 rolloutActions:
   enabled: false
 
+# The Harness GitOps agent's ServiceAccount, in argocdNamespace.
+#
+# READ THE COMMENT IN rbac-workload.yaml BEFORE CHANGING THIS. Harness does NOT
+# reach the workload namespaces as argocd-server or as the application-controller
+# - it proxies through this identity, so the two Roles above grant it nothing.
+# Created by the gitops-helm subchart; 'gitops-agent' is its default name.
+agentServiceAccount: gitops-agent
+
 # Neuter the permissive 'default' AppProject that Argo auto-creates in the
 # instance namespace. Hygiene, not a wall - the Roles are the wall - but it
 # turns a silent wrong-project deploy into an early clean error.

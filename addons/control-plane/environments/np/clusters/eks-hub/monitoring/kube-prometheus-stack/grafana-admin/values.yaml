@@ -1,0 +1,47 @@
+# Ladder rung 3 - the Grafana admin credential for the eks-hub cluster.
+#
+# Resolved path:
+#   $values/addons/control-plane/environments/np/clusters/eks-hub/
+#           monitoring/kube-prometheus-stack/grafana-admin/values.yaml
+#                      ^chartName            ^additionalResources.type
+#
+# CLUSTER RUNG, not a defaults rung, because remoteKey names a specific cluster
+# and must be unique per cluster. Two clusters sharing a remoteKey would share a
+# Grafana password, and the second one to start would read the first's.
+
+secretStore:
+  # Not created here - external-secrets owns the ClusterSecretStore. This block
+  # only tells charts/addon-secrets which store to REFERENCE.
+  enabled: false
+  kind: ClusterSecretStore
+  name: aws-secrets-manager
+
+generatedSecrets:
+  grafana-admin:
+    enabled: true
+    namespace: monitoring
+    # What grafana.admin.existingSecret points at, in the same rung's
+    # kube-prometheus-stack values.yaml.
+    targetName: grafana-admin
+    # ---- THE CLUSTER NAME HERE IS THE **AWS** ONE ------------------------
+    # 'hub-cluster', not 'eks-hub'. Those are two different names for the same
+    # cluster and it is a genuine trap:
+    #   eks-hub      - how Argo knows it (hubCluster.name, and this folder)
+    #   hub-cluster  - the EKS cluster name, which is what terraform builds the
+    #                  IAM scope from:
+    #                  arn:aws:secretsmanager:<region>:*:secret:<cluster>/*
+    # Use the Argo name here and every fetch fails AccessDenied, with nothing in
+    # the error mentioning names or paths.
+    #
+    # Convention is <cluster>/<addon>/<key>.
+    remoteKey: "hub-cluster/grafana/admin"
+    passwordKey: admin-password
+    length: 24
+    # No symbols: this password gets pasted into URLs, kubectl one-liners and CI
+    # variables, where punctuation is a quoting bug waiting to happen. Length
+    # buys more entropy than symbols do.
+    symbols: 0
+    literals:
+      # Grafana needs admin-user in the SAME Secret as admin-password. Merged in
+      # as a literal so no ESO templating touches the fetched secret value.
+      admin-user: admin

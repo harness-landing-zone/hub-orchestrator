@@ -93,8 +93,23 @@ prometheus:
 #     kubectl --context eks-hub -n monitoring port-forward \
 #       svc/kube-prometheus-stack-grafana 3000:80
 grafana:
-  # PIN THE ADMIN PASSWORD BEFORE ANYONE DEPENDS ON IT. Grafana regenerates it
-  # on every helm upgrade unless grafana.admin.existingSecret is set, so a
-  # cached password dies at the next monitoring change. Read the current one
-  # from the kube-prometheus-stack-grafana Secret, do not assume it is stable.
   enabled: true
+  # ---- THIS IS WHAT STOPS THE PASSWORD CHURN ------------------------------
+  # Without it the chart mints a NEW admin password on every render, so the
+  # Secret diffs on every comparison, the Application is permanently OutOfSync,
+  # and selfHeal rotates the credential on every pass. Observed doing exactly
+  # that on 2026-08-03 - the Grafana pod hash changed between two syncs.
+  #
+  # The Secret named here is produced by the grafana-admin entry in this rung's
+  # sibling folder (grafana-admin/values.yaml), rendered by charts/addon-secrets:
+  # generated once in-cluster, pushed to Secrets Manager under
+  # hub-cluster/grafana/admin, and read back from there so it survives a
+  # cluster rebuild.
+  #
+  # It carries BOTH keys the chart expects - admin-user and admin-password.
+  # Point this at a Secret missing either and Grafana starts with an empty
+  # credential rather than failing, which is worse than crashing.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password

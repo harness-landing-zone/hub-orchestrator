@@ -45,6 +45,23 @@ external-secrets:
         operator: In
         values: ['true']
 
+  # The ClusterSecretStore that every ExternalSecret in the fleet resolves
+  # against. It ships WITH the controller rather than as its own component
+  # because it is useless without it and meaningless alongside anything else.
+  #
+  # A list even though there is one entry: the shape is the same either way and
+  # the next addition here does not need the catalogue restructured.
+  #
+  # `type: secret-store` is what puts its values at
+  #   <rung>/addons/external-secrets/secret-store/values.yaml
+  # rather than colliding with the controller's own values.yaml in the parent
+  # folder. That path segment IS the mechanism for multiple folders per chart.
+  additionalResources:
+    - path: charts/addon-secrets
+      type: secret-store
+      helm:
+        releaseName: secret-store
+
   # DELIBERATELY NO valuesObject.
   #
   # Everything this addon needs is either cluster-specific or plausibly so. The

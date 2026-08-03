@@ -121,4 +121,84 @@ subjects:
     name: argocd-server
     namespace: {{ $top.Values.argocdNamespace | quote }}
 ---
+{{- /*
+THE HARNESS AGENT IS A THIRD IDENTITY, and missing it is the single most
+expensive class of bug on this hub.
+
+The two Roles above are the UPSTREAM ARGO answer: argocd-server runs the UI's
+reads, logs and resource actions, the application-controller applies manifests.
+Both are correct, and both are irrelevant when the request arrives from Harness.
+
+Harness proxies through the AGENT, so every Harness-originated request against a
+workload namespace authenticates as
+  system:serviceaccount:<argocdNamespace>:<agentServiceAccount>
+which holds nothing here unless this Role grants it. Two failures already paid
+for, and they look nothing alike:
+
+  - Log pane empty for any tenant workload, no error surfaced anywhere:
+        pods "podinfo-..." is forbidden: User
+        "system:serviceaccount:team1-argo:gitops-agent" cannot get resource
+        "pods/log" in ... namespace "team1-dev"
+    Cost two diagnostic rounds - the crashing image's config had to be read from
+    the container registry because the logs were unreachable.
+
+  - GitOps Rollout step dies at the first canary pause:
+        failed to get rollouts resource from argo: ... rollouts.argoproj.io
+        "podinfo" is forbidden: User
+        "system:serviceaccount:team1-argo:gitops-agent" cannot get resource
+        "rollouts" in API group "argoproj.io" in the namespace "team1-prod"
+    Note this is a GET, not the patch that rolloutActions above anticipates. The
+    argocd-server grant does not help: that path is Argo's own resource actions,
+    a different caller entirely.
+
+Deliberately NOT a copy of the argocd-server Role. That one opens '*'/'*' read
+across the namespace; this grants only what Harness has been observed to need,
+so a new Harness capability shows up as a clean 403 naming its own resource
+rather than silently working through an over-broad grant. If a future step needs
+list/watch on rollouts, add it here - the 403 will say so.
+
+Still strictly inside WALL 1: namespace-scoped Roles only, no ClusterRole, no
+new namespace, and less power than the application-controller already holds
+beside it.
+
+SUPERSEDED BY I22 when the controller reconciles per-namespace RBAC from a
+managed-by label. Keep this shaped as "one Role per identity per workload
+namespace" so I22 can absorb it wholesale.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $top.Values.team }}-gitops-agent
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+rules:
+  # Harness routes log requests through the agent, not through argocd-server.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+{{- if $top.Values.rolloutActions.enabled }}
+  # get: the GitOps Rollout step reads Rollout status before every action.
+  # patch: resume / promote-full / abort / retry / restart.
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts", "rollouts/status"]
+    verbs: ["get", "patch"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $top.Values.team }}-gitops-agent
+  namespace: {{ . | quote }}
+  labels:
+    {{- include "tenant-platform.labels" $top | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $top.Values.team }}-gitops-agent
+subjects:
+  - kind: ServiceAccount
+    name: {{ $top.Values.agentServiceAccount | quote }}
+    namespace: {{ $top.Values.argocdNamespace | quote }}
+---
 {{- end }}
