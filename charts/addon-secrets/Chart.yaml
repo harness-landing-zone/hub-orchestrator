@@ -12,8 +12,8 @@ description: >-
   That chart cannot express an ordinary credential, and widening it would make
   a fleet-registration chart do two unrelated jobs.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
 keywords:
   - external-secrets
   - secrets
