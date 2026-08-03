@@ -70,26 +70,44 @@ module "aws_cloudwatch_observability_pod_identity" {
 ################################################################################
 # EBS CSI EKS Access
 ################################################################################
-# module "aws_ebs_csi_pod_identity" {
-#   source  = "terraform-aws-modules/eks-pod-identity/aws"
-#   version = "~> 1.12.0"
+# REQUIRED, not optional - the aws-ebs-csi-driver addon is installed in eks.tf
+# and without this module it has NO WAY TO AUTHENTICATE TO EC2.
+#
+# What it looked like while this was commented out (21h, 1272 restarts):
+#   ebs-csi-controller  1/6  CrashLoopBackOff
+#   ebs-plugin: "Failed health check (verify network connection and IAM
+#   credentials): dry-run EC2 API call failed: ... DescribeAvailabilityZones,
+#   get identity: get credentials: failed to refresh cached credentials,
+#   no EC2 IMDS role found"
+#
+# The four sidecars (attacher, provisioner, resizer, snapshotter) crashloop as
+# a CONSEQUENCE - they cannot reach a plugin that never passes its health
+# check. Do not debug them; they are downstream.
+#
+# The failure is invisible from the workload side until something wants a
+# volume: no PVC existed anywhere on this cluster, so nothing had ever
+# exercised the path. A PVC simply sits Pending forever with no event that
+# names IAM.
+module "aws_ebs_csi_pod_identity" {
+  source  = "terraform-aws-modules/eks-pod-identity/aws"
+  version = "~> 1.12.0"
 
-#   name = "aws-ebs-csi"
+  name = "aws-ebs-csi"
 
-#   attach_aws_ebs_csi_policy = true
-#   aws_ebs_csi_kms_arns      = ["arn:aws:kms:*:*:key/*"]
+  attach_aws_ebs_csi_policy = true
+  aws_ebs_csi_kms_arns      = ["arn:aws:kms:*:*:key/*"]
 
-#   # Pod Identity Associations
-#   associations = {
-#     addon = {
-#       cluster_name    = module.eks.cluster_name
-#       namespace       = "kube-system"
-#       service_account = "ebs-csi-controller-sa"
-#     }
-#   }
+  # Pod Identity Associations
+  associations = {
+    addon = {
+      cluster_name    = module.eks.cluster_name
+      namespace       = "kube-system"
+      service_account = "ebs-csi-controller-sa"
+    }
+  }
 
-#   tags = local.tags
-# }
+  tags = local.tags
+}
 
 ################################################################################
 # AWS ALB Ingress Controller EKS Access

@@ -1,0 +1,120 @@
+# Ladder rung 1 - tenant defaults for the control-plane tenant.
+#
+# Resolved path:
+#   $values/addons/control-plane/defaults/monitoring/kube-prometheus-stack/values.yaml
+#            ^basepath ^tenant    ^rung    ^group     ^chartName
+#
+# The folder is the CHART name, not the catalogue key. Two components sharing a
+# chart share this folder unless they set different valuesFileName.
+#
+# WHAT BELONGS HERE, AND WHY IT IS NOT IN THE CATALOGUE
+# -----------------------------------------------------
+# A catalogue's valuesObject BEATS EVERY LADDER RUNG, silently - proven by
+# control experiment, not inferred. Argo applies valuesObject AFTER valueFiles,
+# so anything in the catalogue is permanently unoverridable per cluster and the
+# override fails with no error, no warning, and a Synced/Healthy Application.
+#
+# So the split is: values that must NEVER vary go in the catalogue; values that
+# are a sensible fleet-wide DEFAULT but that some cluster might legitimately
+# need to change go here. Anything sized to one cluster's hardware goes in
+# rung 3.
+#
+# Rungs are last-wins: cluster (3) > environment (2) > tenant (1). Every rung is
+# read with ignoreMissingValueFiles, so a cluster with no overrides simply gets
+# what is here.
+
+# ---- Retention ------------------------------------------------------------
+# TWO bounds, and the SIZE one is what actually stops a disk filling - time
+# alone does not, because a scrape-volume spike fills the volume long before
+# the days run out.
+#
+# Deliberately TIME-primary, SIZE-backstop. Set retention much higher and that
+# inverts: the size cap binds first and silently truncates history while the
+# config still claims the full period.
+#
+# 10d is sized to what this data is FOR: continuous verification compares a
+# deployment against a recent baseline (hours to days) and post-incident review
+# needs days. Long-term capacity trending is the only case wanting more, and
+# that is a per-cluster decision - override it in rung 3, not here.
+prometheus:
+  prometheusSpec:
+    retention: 10d
+    # MUST stay below the volume size set in rung 3, with room for WAL and
+    # compaction. A cluster that grows its claim must raise this too - and
+    # raising this WITHOUT raising the claim just fills the disk.
+    retentionSize: 9GB
+    resources:
+      requests:
+        cpu: 250m
+        memory: 2Gi
+      limits:
+        # No CPU limit on purpose: throttling the scrape loop produces gaps
+        # that look like target failures. Memory is the one worth bounding.
+        memory: 3Gi
+
+grafana:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  # No PVC: the stack's dashboards are provisioned from ConfigMaps and survive
+  # a restart on their own. HAND-MADE DASHBOARDS WOULD NOT - turn this on in
+  # rung 3 for any cluster before building any.
+  persistence:
+    enabled: false
+  # ClusterIP by default. Exposure is a per-cluster decision (the homelab
+  # reaches Grafana through ingress-nginx on a tailnet-pinned address; EKS has
+  # no equivalent yet), so any Ingress belongs in rung 3.
+  service:
+    type: ClusterIP
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# ---- Control-plane component scraping -------------------------------------
+# DEFAULTED OFF, and this is the conservative direction on purpose.
+#
+# Whether these are scrapeable is a property of how the cluster was BUILT, not
+# of the fleet: k3s runs controller-manager, scheduler, proxy and etcd inside
+# one process, and EKS hides all four behind a managed control plane. Left
+# enabled the chart creates ServiceMonitors for endpoints that do not exist,
+# and Prometheus shows permanently DOWN targets plus alerts that mean nothing.
+#
+# A cluster that CAN scrape one of these turns it back on in rung 3 -
+# kubeProxy on EKS is exactly that case, since it runs as an ordinary
+# DaemonSet in kube-system.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# Same reasoning for the shipped alert rules covering those components - an
+# alert for a component you cannot scrape is noise that trains people to
+# ignore the alert list.
+defaultRules:
+  rules:
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    etcd: false

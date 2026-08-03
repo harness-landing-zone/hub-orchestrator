@@ -127,6 +127,76 @@ gitopsAgent:
       install: true
       keep: true
 
+# ---------------------------------------------------------------------------
+# SELF-REGISTRATION - this cluster as a destination in its OWN Argo.
+#
+# THE DIVISION OF LABOUR, and the reason this block exists: the local hub's job
+# is to install and REGISTER agents onto members - it ships the bundle and then
+# stops. It does NOT go on to push every addon across the wire. Each member's
+# own org-level Argo installs its own addons, which is what keeps the hub small
+# and stops it becoming a single point of failure for the whole fleet.
+#
+# That only works if this cluster is a destination in its own Argo WITH
+# metadata, because charts/application-sets reads everything it needs off a
+# cluster Secret: repo coordinates from annotations, ladder position from
+# labels. Without this Secret the clusters generator matches nothing and the
+# whole thing reports "generated successfully" with ZERO Applications.
+#
+# NAME IS 'eks-hub', NOT THE CHART DEFAULT 'hub-cluster'. The valueFiles ladder
+# keys its per-cluster rung on {{.name}}, so taking the default would resolve
+# this cluster to addons/<tenant>/environments/<env>/clusters/HUB-CLUSTER/ -
+# the exact folder the homelab hub uses, whose values are the opposite of what
+# EKS needs (local-path vs EBS, kubeProxy disabled vs scrapeable). The
+# fleet_member LABEL still says hub-cluster because that is the role the root
+# ApplicationSet selects on. Role and identity are separate on purpose.
+# ---------------------------------------------------------------------------
+hubCluster:
+  enabled: true
+  name: eks-hub
+  # It IS a hub in its own Argo - this is what rootAppSet.selector matches.
+  fleetMember: hub-cluster
+  labels:
+    # Ladder rungs 1 and 2. These must match the labels the homelab hub already
+    # stamps on ITS copy of this cluster (cluster-eks-hub), or the same cluster
+    # would read two different ladder paths depending on which Argo asked.
+    tenant: control-plane
+    environment: np
+    # The per-addon gate, applied because the monitoring wrapper sets
+    # useSelectors: "true". Absent, kube-prometheus-stack simply never
+    # generates - silently, with the appset still reporting success.
+    enable_kube_prometheus_stack: "true"
+  annotations:
+    # READ BARE-FIELD by the chart ({{.metadata.annotations.addons_repo_url}}),
+    # and missingkey=error makes any one of the three fatal to the ENTIRE
+    # ApplicationSet - not to one Application. All three or none.
+    #
+    # basepath CANNOT be empty either: an empty value renders a double slash.
+    addons_repo_url: https://github.com/harness-landing-zone/hub-orchestrator.git
+    addons_repo_revision: main
+    addons_repo_basepath: addons
+
+# ---------------------------------------------------------------------------
+# Root ApplicationSet for THIS member's own Argo: stamps one root Application
+# that syncs a flat folder of ApplicationSets from this monorepo.
+#
+# PATH IS eks-hub/bootstrap, DELIBERATELY NOT eks-hub/applications. That second
+# folder holds four Applications that are already running and were applied by
+# hand; pointing the root appset at it would silently take them under
+# management as a side effect of enabling monitoring. A new folder keeps this
+# change to exactly what it claims to be.
+#
+# NOT the hub's own bootstrap/ folder either - that one carries ingress-nginx,
+# cert-manager and a monitoring appset sized to three homelab worker VMs.
+# ---------------------------------------------------------------------------
+rootAppSet:
+  enabled: true
+  name: eks-hub-application-sets
+  selector:
+    fleet_member: hub-cluster
+  path: eks-hub/bootstrap
+  targetRevision: main
+  project: default
+
 # Maps this member's Argo AppProject to a Harness project, so Applications
 # filed under it appear in that project's GitOps view.
 #

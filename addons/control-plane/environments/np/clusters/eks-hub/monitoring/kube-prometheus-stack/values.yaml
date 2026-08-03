@@ -1,0 +1,100 @@
+# Ladder rung 3 - the eks-hub cluster itself. LAST WINS, so this beats the
+# environment and tenant rungs (but never the catalogue's valuesObject).
+#
+# Resolved path:
+#   $values/addons/control-plane/environments/np/clusters/eks-hub/
+#           monitoring/kube-prometheus-stack/values.yaml
+#
+# 'eks-hub' here is the cluster Secret's stringData name, set by hubCluster.name
+# in fleet-members/hub-cluster/eks-hub.yaml. It is deliberately NOT the chart
+# default 'hub-cluster' - that would collide with the homelab hub's folder, and
+# these two clusters need opposite values in almost every block below.
+
+# ---- Control-plane component scraping: EKS is NOT k3s ---------------------
+# Rung 1 turns all four off because that is the safe default. EKS differs from
+# k3s in exactly ONE of them.
+#
+# kube-proxy on EKS runs as an ordinary DaemonSet in kube-system with a real
+# metrics endpoint, so it IS scrapeable here. On k3s it is inside the single
+# k3s process and is not. This is the value that must never be written into a
+# shared catalogue: it is a property of how the cluster was built.
+kubeProxy:
+  enabled: true
+
+# The other three stay OFF, and for a DIFFERENT reason than on k3s: EKS runs
+# the control plane as a managed service. There is no endpoint to scrape for
+# controller-manager, scheduler or etcd at any price - AWS does not expose
+# them. Enabling these produces permanently DOWN targets, not data.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# Alert rules follow the same split - re-enable only the one we can actually
+# observe.
+defaultRules:
+  rules:
+    kubeProxy: true
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    etcd: false
+
+# ---- Storage: EBS, not local-path -----------------------------------------
+# The homelab's storage assumptions do not transfer at all. There, local-path
+# is a hostPath provisioner with NO quota that reports the whole node
+# filesystem as the volume's capacity, so the claim is metadata rather than a
+# limit and Prometheus can fill the node. On EBS the claim is REAL: the volume
+# is provisioned at this size and Prometheus cannot exceed it.
+#
+# That inverts which bound matters. Here retentionSize (rung 1: 9GB) is the
+# safety margin UNDER a genuinely enforced 10Gi, and running out means the
+# TSDB stops accepting writes rather than the node dying.
+prometheus:
+  prometheusSpec:
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          # PINNED EXPLICITLY, even though gp3 is now the cluster default.
+          #
+          # Relying on the default would work today and break silently the day
+          # anyone adds a second default or moves the annotation: the PVC would
+          # bind to a different class and nothing would report a problem.
+          #
+          # This class is created by terraform/eks-hub/storage.tf, which is
+          # ALSO where the reason it did not exist before is written down. It
+          # did not exist because the EBS CSI driver had no IAM identity and
+          # had been crashlooping for 21 hours - a PVC created before that fix
+          # sits Pending forever with no event naming IAM.
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              # IMMUTABLE ONCE CREATED. This renders into a StatefulSet
+              # volumeClaimTemplate and Kubernetes forbids updating those in
+              # place - editing this number makes the SYNC FAIL, it does not
+              # resize anything.
+              #
+              # Unlike local-path, EBS does support expansion when the
+              # StorageClass sets allowVolumeExpansion: true, but the route is
+              # still: delete the StatefulSet keeping the PVC, edit the PVC,
+              # let Argo recreate. Not an edit here.
+              storage: 10Gi
+
+# ---- Grafana --------------------------------------------------------------
+# ClusterIP inherited from rung 1, and NO Ingress on purpose.
+#
+# The homelab reaches Grafana over a tailnet-pinned ingress-nginx with a
+# wildcard DNS record. None of that exists on EKS: an Ingress here would need
+# an ALB, a public DNS name and an auth story, and Prometheus itself has NO
+# authentication whatsoever. Until that is designed, reach it with:
+#     kubectl --context eks-hub -n monitoring port-forward \
+#       svc/kube-prometheus-stack-grafana 3000:80
+grafana:
+  # PIN THE ADMIN PASSWORD BEFORE ANYONE DEPENDS ON IT. Grafana regenerates it
+  # on every helm upgrade unless grafana.admin.existingSecret is set, so a
+  # cached password dies at the next monitoring change. Read the current one
+  # from the kube-prometheus-stack-grafana Secret, do not assume it is stable.
+  enabled: true
