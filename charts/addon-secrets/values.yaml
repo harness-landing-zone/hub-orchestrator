@@ -4,30 +4,40 @@
 # A ClusterSecretStore, plus per-addon ExternalSecrets that READ credentials
 # from AWS Secrets Manager. Nothing more.
 #
-# WHY THIS IS READ-ONLY, having briefly not been
+# READ-ONLY BY DESIGN - WHERE THE BOUNDARY SITS
 # ----------------------------------------------
-# The first version generated the password in-cluster (Password generator ->
-# seed ExternalSecret -> PushSecret -> consuming ExternalSecret), so the value
-# never had to be created by hand. Four resources to avoid one manual step.
+# This chart consumes credentials. It does not create them. Whatever owns the
+# AWS account owns a secret's lifecycle: terraform today, alongside the IAM and
+# Pod Identity it already manages for this cluster; ACK (AWS Controllers for
+# Kubernetes) later if secret provisioning should move in-cluster.
 #
-# It does not work: external-secrets v2.8.0 sends `AddReplicaRegions: []` on
-# CreateSecret and AWS rejects empty arrays with
+# That split is the point. Creating an AWS resource and consuming it are
+# different jobs with different blast radii, and putting both in one chart
+# means every cluster that merely READS a credential also carries permission to
+# WRITE it.
+#
+# WHAT A NEW CLUSTER THEREFORE NEEDS: the Secrets Manager entry must exist
+# before the consuming addon will go Healthy. Create it in the cluster's
+# terraform lifecycle, or by hand for a one-off:
+#
+#   aws secretsmanager create-secret --name <cluster>/<addon>/<key> \
+#     --region <region> --secret-string '{"<property>":"<value>"}'
+#
+# An earlier version generated the password in-cluster and published it with a
+# PushSecret - four resources per credential, to avoid exactly that step. Worth
+# knowing before anyone reinstates it: external-secrets v2.8.0 cannot create a
+# Secrets Manager entry at all. Its CreateSecret call sends
+# `AddReplicaRegions: []`, and AWS rejects empty arrays:
 #
 #   ValidationException: Value '[]' at 'addReplicaRegions' failed to satisfy
 #   constraint: Member must have length greater than or equal to 1
 #
-# No CRD field suppresses it - checked both the ClusterSecretStore provider
-# schema (only forceDeleteWithoutRecovery / recoveryWindowInDays) and the
-# PushSecret remoteRef schema (only property / remoteKey). See BUGS B25.
-#
-# The bug only affects CREATE. Once the remote secret exists ESO uses
-# PutSecretValue, which is fine. So the whole generate-and-push apparatus only
-# ever bought the FIRST write - and it is the first write that is broken.
-#
-# Deleting it removes three resources per credential and one upstream defect
-# from the critical path. The secret is created once, out of band; everything
-# after that is a plain read. Restore generation only if ESO fixes CreateSecret
-# AND the manual step is genuinely costing something.
+# Nothing in the CRD surface populates or suppresses that field - checked both
+# the ClusterSecretStore provider schema (only forceDeleteWithoutRecovery /
+# recoveryWindowInDays) and the PushSecret remoteRef schema (only property /
+# remoteKey). It affects CREATE only; once the entry exists, PutSecretValue
+# works fine. So that design could never make the first write, which was the
+# only write it existed to make.
 # ============================================================================
 
 # ---- ClusterSecretStore -----------------------------------------------------

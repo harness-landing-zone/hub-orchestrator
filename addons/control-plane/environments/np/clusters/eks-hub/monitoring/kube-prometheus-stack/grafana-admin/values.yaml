@@ -31,9 +31,14 @@ externalSecrets:
     # Use the Argo name and every fetch fails AccessDenied, with nothing in the
     # error mentioning names or paths.
     #
-    # PRE-EXISTING, created out of band. This chart only READS - see the chart's
-    # values.yaml for why the generate-and-push version was removed (ESO B25).
-    # A new cluster needs this secret created before monitoring will go Healthy.
+    # PRE-EXISTING - this chart only READS. Creating the entry belongs to
+    # whatever owns the AWS account: the cluster's terraform lifecycle, or ACK
+    # if secret provisioning moves in-cluster later. See charts/addon-secrets
+    # values.yaml for why that boundary is drawn there.
+    #
+    # A NEW CLUSTER NEEDS THIS SECRET TO EXIST BEFORE MONITORING GOES HEALTHY.
+    # Grafana will not start without it, and the failure looks like a Grafana
+    # problem rather than a missing credential.
     remoteKey: "hub-cluster/grafana/admin"
     data:
       - secretKey: admin-password
