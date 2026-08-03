@@ -52,16 +52,17 @@ spec:
           # that differs per TENANT comes from the values file below.
           - list:
               elements:
+                # Only the chart location differs per role now. The values path
+                # is identical for both, because `$values` is repo-root
+                # relative - see the sources block below.
+                #
+                # To publish these charts to a registry later, this is the only
+                # place that changes: swap `chartPath` for a chart name plus
+                # version and adjust the second source accordingly.
                 - role: platform
                   chartPath: eks-hub/charts/tenant-platform
-                  # Relative to the CHART directory, which is why the two roles
-                  # differ: tenant-platform sits two levels under the repo root
-                  # inside eks-hub/, the bootstrap chart sits directly under
-                  # charts/. Both resolve to eks-hub/tenants/<team>/values.yaml.
-                  valuesPrefix: ../../tenants
                 - role: instance
                   chartPath: charts/harness-gitops-agent-bootstrap
-                  valuesPrefix: ../../eks-hub/tenants
           # One element per tenant. The file's top-level keys (team,
           # argocdNamespace, ...) become template parameters directly, so the
           # values file stays the single source of truth for a tenant - no
@@ -110,13 +111,32 @@ spec:
       destination:
         server: https://kubernetes.default.svc
         namespace: '{{.argocdNamespace}}'
-      source:
-        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
-        targetRevision: HEAD
-        path: '{{.chartPath}}'
-        helm:
-          valueFiles:
-            - '{{.valuesPrefix}}/{{.team}}/values.yaml'
+      # MULTI-SOURCE, the same shape charts/application-sets uses, and for the
+      # same reason: `$values` resolves from the REPO ROOT rather than from the
+      # chart directory.
+      #
+      # The alternative - a single source with a chart-relative path - forces a
+      # different `../../` depth per chart (tenant-platform sits inside
+      # eks-hub/, the bootstrap chart directly under charts/), so every role
+      # had to carry its own prefix. Worse, it only works while the chart lives
+      # in THIS git repo: publish these charts to a Helm/OCI registry and a
+      # relative path has nothing to be relative to.
+      #
+      # With `ref: values` the values path is identical for every role and
+      # survives the charts moving to a registry - only the second source
+      # changes, from `path:` to `chart:` + `targetRevision:`.
+      sources:
+        # Values-only reference. Contributes no manifests; it exists so
+        # `$values` resolves.
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          ref: values
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          path: '{{.chartPath}}'
+          helm:
+            valueFiles:
+              - '$values/eks-hub/tenants/{{.team}}/values.yaml'
       syncPolicy:
         automated:
           selfHeal: true
