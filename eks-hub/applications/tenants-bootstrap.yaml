@@ -61,8 +61,31 @@ spec:
                 # version and adjust the second source accordingly.
                 - role: platform
                   chartPath: eks-hub/charts/tenant-platform
+                  # Matches what this Application defaulted to before the
+                  # migration (helm defaults releaseName to the Application
+                  # name). tenant-platform does not stamp
+                  # app.kubernetes.io/instance, so nothing here is load-bearing
+                  # - it is explicit only so both roles read the same way.
+                  releaseSuffix: platform
                 - role: instance
                   chartPath: charts/harness-gitops-agent-bootstrap
+                  # LOAD-BEARING - DO NOT CHANGE OR DROP.
+                  #
+                  # The hand-written team1-instance.yaml set
+                  # releaseName: team1-argocd. Omitting it makes helm default to
+                  # the APPLICATION name (team1-instance), which renames the
+                  # release and rewrites app.kubernetes.io/instance on all ~50
+                  # rendered resources.
+                  #
+                  # That label is in the argo-cd chart's Deployment SELECTORS:
+                  #   deploy/argocd-repo-server
+                  #     selector: app.kubernetes.io/instance=team1-argocd
+                  # Selectors are IMMUTABLE, so the sync fails on an immutable
+                  # field - or, if forced, recreates the tenant's entire Argo.
+                  #
+                  # Caught on 2026-08-03 only because the Application sat
+                  # OutOfSync long enough to read the diff.
+                  releaseSuffix: argocd
           # One element per tenant. The file's top-level keys (team,
           # argocdNamespace, ...) become template parameters directly, so the
           # values file stays the single source of truth for a tenant - no
@@ -135,6 +158,10 @@ spec:
           targetRevision: HEAD
           path: '{{.chartPath}}'
           helm:
+            # Explicit per role. Left unset, helm falls back to the Application
+            # name, which for the instance role silently renames the release -
+            # see releaseSuffix above for why that breaks the sync outright.
+            releaseName: '{{.team}}-{{.releaseSuffix}}'
             valueFiles:
               - '$values/eks-hub/tenants/{{.team}}/values.yaml'
       syncPolicy:
