@@ -165,6 +165,15 @@ hubCluster:
     # useSelectors: "true". Absent, kube-prometheus-stack simply never
     # generates - silently, with the appset still reporting success.
     enable_kube_prometheus_stack: "true"
+    # Gate for the ADDONS group's external-secrets entry. One label per addon,
+    # per group - the gates are independent, so a cluster can take monitoring
+    # without addons or the reverse.
+    #
+    # The IAM side of this addon already exists: terraform created the EKS Pod
+    # Identity association for external-secrets/external-secrets-sa, but the
+    # controller itself was never installed - the namespace is empty. This
+    # label is what finally deploys the workload the identity was waiting for.
+    enable_external_secrets: "true"
   annotations:
     # READ BARE-FIELD by the chart ({{.metadata.annotations.addons_repo_url}}),
     # and missingkey=error makes any one of the three fatal to the ENTIRE

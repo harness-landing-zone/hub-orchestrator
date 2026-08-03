@@ -1,0 +1,72 @@
+# Ladder rung 1 - tenant defaults for external-secrets, control-plane tenant.
+#
+# Resolved path:
+#   $values/addons/control-plane/defaults/addons/external-secrets/values.yaml
+#            ^basepath ^tenant    ^rung    ^group ^chartName
+#
+# The repeated 'addons' is not a mistake: the first is addons_repo_basepath
+# (where fleet values live in this repo), the second is the applicationSetGroup.
+# They are unrelated names that happen to match.
+
+# ---- THE SERVICE ACCOUNT NAME IS LOAD-BEARING -----------------------------
+# It MUST equal the service account in the EKS Pod Identity association that
+# terraform creates, or the controller runs with no AWS identity at all.
+#
+#   terraform/eks-hub/locals.tf:
+#     external_secrets = { namespace = "external-secrets"
+#                          service_account = "external-secrets-sa" }
+#
+# The chart's own default is a generated fullname ("external-secrets"), which
+# does NOT match, so leaving this unset silently produces a controller that
+# cannot reach Secrets Manager. The failure mode is the same family as the EBS
+# CSI driver's (BUGS B22): the pod runs, and only an AWS API call fails, with an
+# error about credentials rather than about configuration.
+#
+# It lives in the ladder rather than the catalogue because it is a per-cluster
+# fact - another cluster's terraform could name it differently, and a value in
+# the catalogue's valuesObject can never be overridden per cluster.
+serviceAccount:
+  create: true
+  name: external-secrets-sa
+  # No eks.amazonaws.com/role-arn annotation, deliberately. That is the IRSA
+  # mechanism; this cluster uses EKS POD IDENTITY, which associates the role to
+  # the (namespace, serviceAccount) pair on the AWS side and injects
+  # credentials at pod start. Nothing is needed on the Kubernetes object.
+  #
+  # Consequence worth remembering: because credentials arrive at pod START, a
+  # controller that was running BEFORE its association existed never picks it
+  # up. It must be restarted. That cost a diagnosis cycle on the EBS CSI driver.
+  annotations: {}
+
+# ---- CRDs -----------------------------------------------------------------
+# Installed with the controller. Paired with ServerSideApply=true in the
+# catalogue's syncPolicy, without which the apply fails on the annotation size
+# limit.
+installCRDs: true
+
+crds:
+  createClusterExternalSecret: true
+  createClusterSecretStore: true
+  createSecretStore: true
+  createPushSecret: true
+
+# ---- Sizing ---------------------------------------------------------------
+# Modest: this is a controller that reconciles a handful of secrets, not a data
+# plane. Raise per cluster in rung 3 if a cluster syncs many secrets or uses
+# short refreshIntervals.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+webhook:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+
+certController:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi

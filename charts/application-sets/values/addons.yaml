@@ -1,0 +1,76 @@
+# ============================================================================
+# ADDONS GROUP - platform capabilities that are not monitoring.
+#
+# WHY A SEPARATE GROUP AND NOT A SECOND ENTRY IN monitoring.yaml
+# --------------------------------------------------------------
+# mergeValues and applicationSetGroup are resolved at HELM RENDER (stage 1), so
+# they cannot be driven by cluster metadata. Group selection is therefore
+# per-WRAPPER: one wrapper Application per group, each rendering this chart with
+# its own mergeValues. That is a property of the chart, not a style choice -
+# putting external-secrets into the monitoring catalogue would file it under
+# .../monitoring/... in the ladder and tie its lifecycle to the monitoring
+# wrapper's sync.
+#
+# The grouping is LOGICAL, and the ladder path is the visible consequence:
+#   addons/<tenant>/.../addons/external-secrets/values.yaml      <- this group
+#   addons/<tenant>/.../monitoring/kube-prometheus-stack/...     <- monitoring
+# The leading 'addons' is the repo basepath (addons_repo_basepath); the second
+# is the group name. They are unrelated and it is fine that they collide.
+#
+# WHAT BELONGS HERE vs THE LADDER - the rule that cost a control experiment:
+# a catalogue's valuesObject BEATS EVERY LADDER RUNG, silently, because Argo
+# applies valuesObject after valueFiles. So this file carries chart
+# coordinates, destination, selector and sync policy - and as little else as
+# possible. Anything a cluster might legitimately need to change goes in a
+# ladder rung, or that cluster can never change it.
+# ============================================================================
+
+external-secrets:
+  enabled: true
+
+  chartName: external-secrets
+  chartRepository: https://charts.external-secrets.io
+  defaultVersion: "2.8.0"
+
+  namespace: '{{default "external-secrets" (index .metadata.annotations "external_secrets_namespace")}}'
+  releaseName: external-secrets
+
+  # Applied only when the wrapper sets useSelectors: "true". A cluster without
+  # this label simply never generates the Application - silently, with the
+  # ApplicationSet still reporting "generated successfully". Verify with
+  # `kubectl get app`, never with appset status.
+  selector:
+    matchExpressions:
+      - key: enable_external_secrets
+        operator: In
+        values: ['true']
+
+  # DELIBERATELY NO valuesObject.
+  #
+  # Everything this addon needs is either cluster-specific or plausibly so. The
+  # service account name in particular MUST match the EKS Pod Identity
+  # association created by terraform (kube-system locals: external-secrets-sa);
+  # a different cluster's terraform could name it differently, and pinning it
+  # here would make that unfixable. It lives in the tenant defaults rung.
+
+  syncPolicy:
+    automated:
+      selfHeal: true
+      # prune OFF, consistent with the rest of the fleet: removing a catalogue
+      # entry should not silently delete a controller that other workloads
+      # depend on for their secrets.
+      prune: false
+    syncOptions:
+      - CreateNamespace=true
+      # REQUIRED. external-secrets ships several large CRDs
+      # (ExternalSecret, ClusterSecretStore, PushSecret, ...) and a client-side
+      # apply fails on the 262144-byte last-applied-configuration annotation
+      # limit with "metadata.annotations: Too long" - the same way
+      # kube-prometheus-stack does.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m

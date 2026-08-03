@@ -24,14 +24,14 @@ type: application
 # compiled into the chart through $.Files.Get, so a catalogue edit changes what
 # renders just as much as a template edit does.
 # ---------------------------------------------------------------------------
-version: 1.2.0
+version: 1.3.0
 
 # The generator has no separate "application" to track, so appVersion mirrors
 # the chart version. This is NOT cosmetic: _helpers.tpl stamps it as
 # app.kubernetes.io/version on every ApplicationSet AND on every Application
 # they generate. It previously read "1.16.0" - the `helm create` default -
 # labelling the entire fleet with a version that never existed.
-appVersion: "1.2.0"
+appVersion: "1.3.0"
 
 keywords:
   - argo-cd
