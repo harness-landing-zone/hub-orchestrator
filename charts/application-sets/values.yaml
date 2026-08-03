@@ -23,8 +23,6 @@ syncPolicy:
     - ServerSideApply=true  # Big CRDs.
 syncPolicyAppSet:
   preserveResourcesOnDeletion: true
-ackPodIdentity:
-  path: "charts/pod-identity"
 # Name prefix for generated ApplicationSets AND the Applications they generate:
 #   <releaseName>-<cluster>-<component>-<version>
 #

@@ -38,7 +38,8 @@ and being discovered on a cluster. See _validate.tpl. */}}
 {{- $mergedValuesObject := dict }}
 {{- if and (kindIs "map" $chartConfig) (hasKey $chartConfig "enabled") }}
 {{- if eq ($chartConfig.enabled | toString) "true" }}
-{{- $nameNormalize := printf "%s" $chartName | replace "_" "-" | trunc 63 | trimSuffix "-"  -}}
+{{- $nameNormalize := printf "%s" $chartName | replace "_" "-" | trunc 63 | trimSuffix "-"  }}
+---
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -177,12 +178,6 @@ spec:
       - repoURL: {{ $repoURLGit | squote}}
         targetRevision: {{ $repoURLGitRevision | squote }}
         ref: values
-        {{- if eq ($chartConfig.enableAckPodIdentity | toString) "true" }}
-        {{ include "application-sets.pod-identity" (dict 
-          "chartName" ($chartConfig.chartName | default $nameNormalize)
-          "valueFiles" $valueFiles 
-          "chartConfig" $chartConfig "values" $values ) | nindent 6 }}
-        {{- end }}
         {{- if $chartConfig.path }}
       - repoURL: {{ $repoURLGit | squote }}
         path: {{$chartConfig.path | squote }}
@@ -243,7 +238,6 @@ spec:
       ignoreDifferences:
         {{- toYaml . | nindent 8 }}
       {{- end }}
----
 {{- end }}
 {{- end }}
 {{- end }}

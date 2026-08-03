@@ -1,4 +1,13 @@
-# Test values for globalValuesObject functionality
+# Test values for globalValuesObject functionality.
+#
+# A FIXTURE HAS NO FLEET, so there is no sensible cluster selector to scope to.
+# _validate.tpl refuses to render with an empty globalSelectors (it would match
+# every registered cluster in a real install), which is correct there and wrong
+# here — so this fixture opts out deliberately rather than the guard being
+# weakened. Without this line the chart's own executable documentation does not
+# execute.
+allowUnscopedSelector: true
+
 globalValuesObject:
   commonLabels:
     app.kubernetes.io/part-of: "eks-fleet-management"
