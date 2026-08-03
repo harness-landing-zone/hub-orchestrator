@@ -55,7 +55,38 @@ spec:
           exclude: exclude/*
       destination:
         namespace: {{ .Release.Namespace | quote }}
+        {{- /* THE PLACEHOLDER DOES NOT SURVIVE THE HARNESS CMP.
+
+        The backtick form below is escaped to survive exactly ONE Go template
+        pass - helm's - so helm emits the literal '{{.name}}' for the
+        ApplicationSet controller to resolve at ITS stage. That is correct when
+        this chart is installed by helm directly (Harness HelmDeploy, the
+        homelab hub's day-0 path), and the homelab's live appset does hold the
+        literal.
+
+        It is WRONG when the chart is installed through an Argo Application
+        using the Harness plugin (plugin.env HELM_ARGS), because the CMP runs a
+        SECOND Go template pass over helm's output. That pass evaluates
+        '{{.name}}' against an empty context and bakes the string '<no value>'
+        into the stored ApplicationSet. Generation then succeeds - "generated 1
+        applications" - and every generated Application is REJECTED at
+        validation with:
+
+          application destination spec is invalid:
+          there are no clusters with this name: <no value>
+
+        so the appset reports ParametersGenerated=True and produces nothing.
+
+        destinationName pins the destination to a literal, skipping the
+        placeholder entirely. Set it on any cluster reached through the plugin.
+        Safe because this template already emits a STATICALLY named Application
+        (see metadata.name), so it has always assumed exactly one matched hub -
+        a per-cluster destination bought nothing it does not already require. */}}
+        {{- if $as.destinationName }}
+        name: {{ $as.destinationName | quote }}
+        {{- else }}
         name: '{{`{{.name}}`}}'
+        {{- end }}
       syncPolicy:
         automated: {}
 {{- end }}

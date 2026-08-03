@@ -166,6 +166,19 @@ rootAppSet:
   repoURL: ""
   path: gitops/bootstrap
   targetRevision: HEAD
+  # Pin the generated Application's destination to a literal cluster name
+  # instead of the {{.name}} placeholder.
+  #
+  # REQUIRED when this chart is installed through an Argo Application that uses
+  # the Harness plugin (plugin.env HELM_ARGS). The CMP runs a SECOND Go template
+  # pass over helm's output, which evaluates the placeholder against an empty
+  # context and stores the literal string "<no value>". Generation then reports
+  # success while every Application is rejected with "there are no clusters with
+  # this name: <no value>".
+  #
+  # Leave empty for a plain helm install (Harness HelmDeploy), where the
+  # placeholder reaches the ApplicationSet controller intact.
+  destinationName: ""
   # Argo AppProject of the root Applications (a Harness agent files them
   # under the Harness project mapped to that AppProject).
   project: default

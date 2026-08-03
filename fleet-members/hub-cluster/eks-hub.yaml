@@ -196,6 +196,12 @@ rootAppSet:
   path: eks-hub/bootstrap
   targetRevision: main
   project: default
+  # MUST be set here: this member is installed through an Argo Application
+  # using the Harness plugin (HELM_ARGS), whose CMP runs a second Go template
+  # pass and destroys the {{.name}} placeholder - see the chart's values.yaml.
+  # Matches hubCluster.name above, which is the only cluster this hub's root
+  # ApplicationSet can match.
+  destinationName: eks-hub
 
 # Maps this member's Argo AppProject to a Harness project, so Applications
 # filed under it appear in that project's GitOps view.
