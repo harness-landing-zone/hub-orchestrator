@@ -65,6 +65,26 @@ spec:
           # Flat read. Subfolders under applications/ are deliberately ignored,
           # so a member can keep working files there without them being applied.
           recurse: false
+          # LOAD-BEARING, AND NOT FOR WHAT IT SAYS.
+          #
+          # `recurse: false` is the ZERO VALUE, so a directory block containing
+          # only that field serialises to NOTHING and disappears from the
+          # generated Application. With no directory block Argo does not treat
+          # the source as plain manifests - it runs CMP DISCOVERY, the Harness
+          # plugin matches, and every file in the folder gets a Go template
+          # pass. Any Argo placeholder in them is evaluated against an empty
+          # context and stored as the literal `<no value>`.
+          #
+          # That is B23 arriving by a new route, and it stayed invisible until
+          # 2026-08-03 because no file in applications/ had ever contained a
+          # placeholder. The first one that did - tenants-bootstrap.yaml -
+          # landed as `<no value>-<no value>` and the appset refused to
+          # generate: "contains applications with duplicate name".
+          #
+          # `exclude` is a NON-zero value, so it keeps the block alive and pins
+          # the source type to directory. root-appset.yaml has always set it and
+          # is why that path never broke. Do not remove it to tidy up.
+          exclude: exclude/*
       syncPolicy:
         automated:
           selfHeal: true
