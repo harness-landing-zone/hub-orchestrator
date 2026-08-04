@@ -182,6 +182,76 @@ gitopsAgent:
     existingSecrets:
       agentToken: team1-argo-agent-token
   argo-cd:
+    # ---- CMP SIDECAR IMAGE OVERRIDE -------------------------------------
+    # WITHOUT THIS, argocdHarnessPlugin.enabled ABOVE IS DECORATIVE.
+    #
+    # gitops-helm 1.2.7 pins harness/gitops-agent-installer-helper:v0.0.3 -
+    # published 2024-12-26, 35.7 MB - and that image contains NEITHER `helm`
+    # NOR `argocd-harness-plugin` anywhere on disk (verified by a full-filesystem
+    # find inside the running sidecar, 2026-08-04). The plugin ConfigMap the
+    # same chart renders calls exactly those two binaries:
+    #     helm template ... | argocd-harness-plugin generate -
+    # so the CMP cannot execute. The org agent is in this same state and nobody
+    # noticed, because no Application on this cluster uses a plugin source.
+    #
+    # v0.0.18 (2026-07-31, 142 MB) carries both at /usr/local/bin - verified by
+    # running the image on eks-hub, not inferred from the size jump.
+    #
+    # HELM REPLACES LISTS, IT DOES NOT MERGE THEM. Both blocks below are
+    # therefore FULL COPIES of the chart's own values with only the image tag
+    # changed. They will silently drift when gitops-helm is upgraded - re-diff
+    # against the subchart's values.yaml on every bump, or a future fix lands
+    # upstream and we keep overriding it with a stale copy.
+    #
+    # NOT applied to the org agent (fleet-members/hub-cluster/eks-hub.yaml)
+    # deliberately: that is the platform's own instance and a 15-version image
+    # jump there is a separate decision with a much larger blast radius.
+    repoServer:
+      initContainers:
+        - name: sops-helm-secrets-tool
+          image: harness/gitops-agent-installer-helper:v0.0.18
+          imagePullPolicy: IfNotPresent
+          command: [ sh, -ec ]
+          args:
+            - |
+              cp -r /custom-tools/. /helm-sops-tools
+              cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm
+              mkdir -p /helm-sops-tools/helm-secrets && cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm-secrets/helm
+              chmod +x /helm-sops-tools/helm-secrets/*
+              chmod +x /helm-sops-tools/*
+          volumeMounts:
+            - mountPath: /helm-sops-tools
+              name: helm-sops-tools
+      extraContainers:
+        - command: [ /var/run/argocd/argocd-cmp-server ]
+          image: harness/gitops-agent-installer-helper:v0.0.18
+          imagePullPolicy: IfNotPresent
+          name: argocd-harness-plugin
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: 512Mi
+            requests:
+              cpu: "0.5"
+              memory: 512Mi
+          securityContext:
+            capabilities:
+              drop:
+                - NET_RAW
+            runAsGroup: 999
+            runAsUser: 999
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /var/run/argocd
+              name: var-files
+            - mountPath: /home/argocd/cmp-server/plugins
+              name: plugins
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              name: argocd-harness-plugin
+              subPath: harness.yaml
     crds:
       # The platform bundle owns the CRDs - they are cluster-scoped and shared
       # with the platform instance. A tenant-driven CRD change would hit the
