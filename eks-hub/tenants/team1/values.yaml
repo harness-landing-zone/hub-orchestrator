@@ -154,6 +154,29 @@ gitopsAgent:
       # Required at PROJECT scope, and must match spec.projectId above.
       projectIdentifier: selfmanagedargo
       agentIdentifier: team1_argo_agent
+    # Brings this tenant to PARITY with the org agent
+    # (fleet-members/hub-cluster/eks-hub.yaml sets the same flag). gitops-helm
+    # defaults it to FALSE, and false renders a STUB ConfigManagementPlugin -
+    # `discover.find` is `exit 1` and `generate` is `exit 0`, so the plugin is
+    # installed and silently produces nothing. Nothing in the rendered manifest
+    # says "disabled"; you only see it by reading the argocd-harness-plugin
+    # ConfigMap on the cluster.
+    #
+    # PARITY IS NOT FUNCTION. Verified 2026-08-04 on eks-hub: the CMP's generate
+    # command runs INSIDE the argocd-harness-plugin sidecar and shells out to
+    # `helm template ... | argocd-harness-plugin generate -`, but that sidecar
+    # (harness/gitops-agent-installer-helper:v0.0.3) contains NEITHER binary
+    # anywhere on disk. Real helm v3.19.4 lives only in the repo-server
+    # container, and the sops-helm-secrets-tool init container stages its tools
+    # into the `helm-sops-tools` volume, which the sidecar never mounts. So the
+    # ORG agent is in this same enabled-but-inert state, which is why the gap
+    # went unnoticed - no Application on this cluster uses a plugin source.
+    #
+    # Consequence: turning this on grants INTENT, not capability. Do not read a
+    # working expression/secret-injection path into it until the sidecar
+    # actually carries the binaries.
+    argocdHarnessPlugin:
+      enabled: true
   agent:
     harnessName: team1-argo-agent
     existingSecrets:
