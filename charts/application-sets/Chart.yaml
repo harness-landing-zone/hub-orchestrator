@@ -24,7 +24,7 @@ type: application
 # compiled into the chart through $.Files.Get, so a catalogue edit changes what
 # renders just as much as a template edit does.
 # ---------------------------------------------------------------------------
-version: 1.4.0
+version: 1.5.0
 
 # The generator has no separate "application" to track, so appVersion mirrors
 # the chart version. This is NOT cosmetic: _helpers.tpl stamps it as

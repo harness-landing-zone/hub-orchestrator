@@ -1,0 +1,141 @@
+#!/bin/bash
+# =============================================================================
+# k3d test fleet bootstrap
+#
+# Runs once, as root, via cloud-init. Full output lands in
+# /var/log/cloud-init-output.log; /var/log/k3d-fleet-ready is written last and
+# is the only reliable "this finished" signal - cloud-init reports success for
+# the *stage*, not for what this script achieved.
+# =============================================================================
+set -euxo pipefail
+
+# cloud-init runs with no HOME. k3d writes its kubeconfig to $HOME/.kube/config,
+# so without this every `k3d cluster create` silently files its context
+# somewhere unreachable and `kubectl config get-contexts` comes back EMPTY on a
+# box whose clusters are all running perfectly.
+export HOME=/root
+
+# --- instance metadata -------------------------------------------------------
+# IMDSv2 only: the instance is created with http_tokens = required, so an
+# unauthenticated IMDS call returns 401 and PRIVATE_IP would silently be empty.
+TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PRIVATE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/local-ipv4)
+
+if [ -z "$PRIVATE_IP" ]; then
+  echo "FATAL: could not read local-ipv4 from IMDS; k3s certs would have no usable SAN" >&2
+  exit 1
+fi
+
+# --- kernel limits -----------------------------------------------------------
+# THE classic multi-cluster k3d failure. Every k3s server burns inotify
+# instances, and the AL2023 default is low enough that the second or third
+# cluster comes up with controllers crash-looping on
+# "too many open files" - which reads like a broken addon, not a host limit.
+cat >/etc/sysctl.d/99-k3d.conf <<'EOF'
+fs.inotify.max_user_watches  = 524288
+fs.inotify.max_user_instances = 512
+EOF
+sysctl --system
+
+# --- docker ------------------------------------------------------------------
+dnf install -y docker
+systemctl enable --now docker
+
+# Wait for the daemon rather than assuming: `systemctl --now` returns before
+# the socket is accepting, and the first k3d call would fail on a cold box.
+for i in $(seq 1 30); do
+  docker info >/dev/null 2>&1 && break
+  sleep 2
+done
+docker info >/dev/null
+
+usermod -aG docker ec2-user || true
+
+# --- kubectl -----------------------------------------------------------------
+# Version resolved at runtime from the release channel. Pinning a literal here
+# would mean this file names a version that may not exist by the time anyone
+# rebuilds the fleet.
+KUBECTL_VERSION=$(curl -sL https://dl.k8s.io/release/stable.txt)
+curl -sLo /usr/local/bin/kubectl \
+  "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+chmod +x /usr/local/bin/kubectl
+
+# --- k3d ---------------------------------------------------------------------
+curl -sL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+command -v k3d
+
+# --- the clusters ------------------------------------------------------------
+# Single-node (--agents 0) on purpose: a separate agent container per cluster
+# doubles the container count and the memory for no benefit here. These
+# clusters exist to receive addon charts, not to test scheduling.
+#
+# --tls-san is what makes registration work WITHOUT insecure: true. k3s only
+# puts localhost/127.0.0.1/0.0.0.0 and the container IP in its serving cert, so
+# Argo dialling https://<private-ip>:<port> would otherwise fail hostname
+# verification and the usual "fix" is to disable TLS verification for good.
+#
+# The existence guard checks DOCKER, not `k3d cluster get` - that subcommand
+# was renamed between k3d v4 and v5, and the install script above always pulls
+# latest. A container-name check cannot rot with the CLI.
+%{ for c in clusters ~}
+if ! docker ps -a --format '{{.Names}}' | grep -qx "k3d-${c.name}-server-0"; then
+  k3d cluster create ${c.name} \
+    --servers 1 \
+    --agents 0 \
+    --api-port "0.0.0.0:${c.api_port}" \
+    --k3s-arg "--tls-san=$PRIVATE_IP@server:*" \
+    --wait
+fi
+%{ endfor ~}
+
+# --- kubeconfig for humans ---------------------------------------------------
+# Merged to a world-readable system path rather than left in /root, because an
+# SSM session lands as `ssm-user`. kubectl only needs the FILE, so this makes
+# `kubectl --context k3d-k3d-1 get pods` work with no sudo at all; k3d and
+# docker commands still need `sudo -i` since they need the docker socket.
+#
+# Rewritten to the private IP because k3d writes https://0.0.0.0:<port>, which
+# works but is the address nothing else in the VPC can use - having the file
+# agree with what Argo dials keeps one address in play instead of two.
+mkdir -p /etc/k3d
+k3d kubeconfig merge --all --output /etc/k3d/kubeconfig.yaml
+sed -i "s#https://0.0.0.0:#https://$PRIVATE_IP:#g" /etc/k3d/kubeconfig.yaml
+chmod 644 /etc/k3d/kubeconfig.yaml
+printf 'export KUBECONFIG=/etc/k3d/kubeconfig.yaml\n' >/etc/profile.d/k3d-fleet.sh
+chmod 644 /etc/profile.d/k3d-fleet.sh
+
+# --- survive a stop/start ----------------------------------------------------
+# The whole point of this fleet is that it gets stopped between tests. Docker
+# restart policies bring the CONTAINERS back, but k3d also has to re-wire the
+# loadbalancer and kubeconfig, so drive it through k3d itself.
+cat >/etc/systemd/system/k3d-fleet.service <<'EOF'
+[Unit]
+Description=Start the k3d test-fleet clusters
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/k3d cluster start --all
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable k3d-fleet.service
+
+# --- readiness marker --------------------------------------------------------
+{
+  echo "private_ip=$PRIVATE_IP"
+  echo "kubectl=$KUBECTL_VERSION"
+  echo "k3d=$(k3d version | head -1)"
+  echo "completed=$(date -Is)"
+  echo "clusters:"
+%{ for c in clusters ~}
+  echo "  ${c.name} https://$PRIVATE_IP:${c.api_port}"
+%{ endfor ~}
+} >/var/log/k3d-fleet-ready
