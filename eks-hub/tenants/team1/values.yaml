@@ -182,6 +182,12 @@ gitopsAgent:
     existingSecrets:
       agentToken: team1-argo-agent-token
   argo-cd:
+    # Harness IDP queries this Argo instance through the in-cluster delegate.
+    # Keep the API server running and expose a read-only local API account.
+    server:
+      replicas: 1
+      serviceAccount:
+        create: true
     # ---- CMP SIDECAR IMAGE OVERRIDE -------------------------------------
     # WITHOUT THIS, argocdHarnessPlugin.enabled ABOVE IS DECORATIVE.
     #
@@ -259,7 +265,13 @@ gitopsAgent:
       install: false
       keep: true
     configs:
+      params:
+        server.insecure: "true"
+      rbac:
+        policy.csv: |
+          g, idp, role:readonly
       cm:
+        accounts.idp: apiKey, login
         # TRUE, and the "false" that used to be here did NOT do what the comment
         # below it claimed. Argo identifies the in-cluster destination by SERVER
         # ADDRESS, not by name - so cluster.inClusterEnabled: "false" disables
