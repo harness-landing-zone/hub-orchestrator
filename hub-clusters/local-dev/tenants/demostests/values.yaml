@@ -1,0 +1,164 @@
+# Tenant: demostests  (Harness organization DemosTests)
+#
+# FIRST TENANT ON THE LOCAL-DEV HUB. Hand-authored on purpose: it proves the
+# Git -> account agent -> tenant Argo path before the IDP pipeline starts
+# writing these files. Read ../README.md for the contract.
+#
+# When this syncs it registers a REAL, ORG-scoped Harness GitOps Agent
+# (demostests_argo_agent) under organization DemosTests. Change `orgId` in the
+# two places below plus the folder name to point it elsewhere.
+#
+# ONE file, TWO charts that ignore each other's keys:
+#   charts/tenant-platform                 the confinement half (platform-applied)
+#   charts/harness-gitops-agent-bootstrap  the instance half (namespaced Argo + agent)
+
+# ---------------------------------------------------------------------------
+# charts/tenant-platform - the walls
+# ---------------------------------------------------------------------------
+team: demostests
+
+# The instance namespace. Deliberately absent from workloadNamespaces: the
+# platform owns the instance, and making it a deploy target would hand the
+# tenant write access to its own Argo CD's config and RBAC. The chart hard-fails
+# if it appears in both.
+argocdNamespace: demostests-argo
+
+workloadNamespaces:
+  - demostests-dev
+
+# The Argo AppProject the tenant's Applications are filed under.
+projectName: demostests
+
+# Empty = deny all. Nothing syncs until a repository is approved and added, which
+# is the safe default for a tenant that has not asked for one yet. Public repos
+# only for now: a private repo needs a tenant-side credential, and that drags the
+# CMP/plugin render path back in (see eks-hub/self-managed-argo-architecture.txt).
+sourceRepos: []
+
+# Pod Security Admission - the dimension RBAC does not cover. RBAC bounds what
+# the controller may CREATE; PSA bounds what the resulting pods may DO.
+namespaceLabels:
+  pod-security.kubernetes.io/enforce: baseline
+  pod-security.kubernetes.io/audit: restricted
+  pod-security.kubernetes.io/warn: restricted
+
+# Second dial, off. The namespace is already the wall. Turning this on REQUIRES
+# setting resource.inclusions to the same list in the tenant's argocd-cm.
+deployableKinds:
+  enabled: false
+  rules: []
+
+# Off: this tenant does not run Argo Rollouts, so it must not carry the patch
+# verb. It also needs the cluster-scoped argo-rollouts CRDs, which the platform
+# installs and this tenant cannot.
+rolloutActions:
+  enabled: false
+
+# Neuter the wide-open 'default' AppProject Argo auto-creates in the instance
+# namespace. Hygiene, not a wall - the Roles are the wall.
+lockDefaultProject: true
+
+# ---------------------------------------------------------------------------
+# Read by bootstrap/tenants-bootstrap.yaml, ignored by both charts.
+# Stamped as labels on the generated Applications so Harness files them under
+# the platform's inventory Service. Safe to leave out entirely on a hand-authored
+# tenant - the ApplicationSet guards for it - but then the instance shows up
+# under no Service.
+# ---------------------------------------------------------------------------
+harness:
+  hub: local-dev
+  envRef: Dev
+  clusterRef: account.hubcluster
+  agentRef: account.dev_hub_account_agent
+  serviceRef: demostests_argo_instance
+
+# ---------------------------------------------------------------------------
+# charts/harness-gitops-agent-bootstrap - the instance
+# ---------------------------------------------------------------------------
+harnessAgent:
+  enabled: true
+  metadata:
+    name: demostests-argo-agent
+  spec:
+    name: demostests-argo-agent
+    # THE LEVEL. ORG means one Argo CD instance serving the whole organization;
+    # switch to PROJECT and add projectId here plus in the identity block to get
+    # a project-scoped agent instead. The chart validates the combination.
+    scope: ORG
+    orgId: DemosTests
+    # Read by the CONTROLLER from its own namespace (hga-system, set by
+    # --api-key-secret-namespace), NOT from this tenant's namespace. Nothing
+    # credential-shaped is created here.
+    apiKeySecretRef: harness-api-key-secret
+    # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
+    # hard-fails otherwise, because a mismatch would run the agent with a blank
+    # token and it would fail for entirely the wrong reason.
+    tokenSecretRef: demostests-argo-agent-token
+  apiKeySecret:
+    # The platform's key already exists in hga-system. A second copy inside the
+    # tenant namespace is exactly what this model exists to avoid.
+    create: false
+
+# No mappings yet: this first pass proves the agent registers at ORG scope. Add
+# one entry per Harness project the tenant should see its Applications in -
+# at ORG scope each entry needs projectId and inherits orgId from the agent:
+#
+# projectMappings:
+#   - name: demostests-<project>
+#     appProject: demostests
+#     projectId: <project>
+#     autoCreateServiceEnv: false
+projectMappings: []
+
+gitopsAgent:
+  enabled: true
+  # Same pin as the platform agent. gitops-helm 1.2.7 defaults to an Argo whose
+  # schema predates .status.terminatingReplicas (Kubernetes 1.33+); this cluster
+  # is 1.33, so the default would come up fine and then fail COMPARISON on every
+  # workload it deploys.
+  global:
+    image:
+      tag: v3.3.10
+  harness:
+    # THE namespaced switch. false drops the three '*'/'*' cluster-admin
+    # ClusterRoles (application-controller, repo-server, gitops-agent). The
+    # bundled argo-cd subchart still renders its namespaced Roles, so the
+    # instance is complete: Roles only, zero ClusterRoles.
+    createClusterRoles: false
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    identity:
+      accountIdentifier: qIYsos1ZQO6fJMG1Ip6KJA
+      orgIdentifier: DemosTests
+      # Empty at ORG scope. Required, and must match spec.projectId, at PROJECT scope.
+      projectIdentifier: ""
+      # Harness identifier - underscores, unlike the DNS-safe names above.
+      agentIdentifier: demostests_argo_agent
+  agent:
+    harnessName: demostests-argo-agent
+    existingSecrets:
+      agentToken: demostests-argo-agent-token
+  argo-cd:
+    crds:
+      # The platform bundle owns the CRDs: they are cluster-scoped and shared
+      # with the account agent's Argo. A tenant-driven CRD change would hit the
+      # platform too.
+      install: false
+      keep: true
+    configs:
+      cm:
+        # TRUE, and this is not a preference. Argo identifies the in-cluster
+        # destination by SERVER ADDRESS, so "false" also disables the explicitly
+        # declared, namespace-restricted demostests-in-cluster Secret that
+        # tenant-platform creates - the Secret exists, Harness shows the cluster
+        # registered, and Argo still answers "there are no clusters with this
+        # name". Confinement then rests on the Roles (absolute) and the
+        # AppProject destination list.
+        cluster.inClusterEnabled: "true"
+
+# Deliberately OFF. That template carries helm.sh/hook with
+# hook-delete-policy: before-hook-creation, and Argo translates helm hooks into
+# sync hooks - so the AppProject would be DELETED AND RECREATED on every sync,
+# and Applications filed under it cannot be validated during the gap.
+# charts/tenant-platform provides the AppProjects as ordinary resources.
+appProject:
+  enabled: false
