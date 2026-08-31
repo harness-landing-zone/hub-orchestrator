@@ -1,0 +1,112 @@
+# TENANT BOOTSTRAP for the gitops-demo hub - every tenant's platform walls plus
+# its namespaced Argo instance, generated from ONE file per tenant:
+#
+#   gitops-demo/tenants/<tenant>/values.yaml
+#
+# Same mechanism as eks-hub/applications/tenants-bootstrap.yaml (read that file
+# for the RollingSync / releaseName / prune reasoning - none of it is repeated
+# here). Two things differ on purpose:
+#
+#   1. This hub's root ApplicationSet applies this folder DIRECTLY to the hub,
+#      so there is no fleet-apps / spoke indirection. The namespace below is
+#      therefore the Dev hub's ACCOUNT agent namespace (account-agent, agent
+#      dev_hub_account_agent). rootAppSet.path is repointed here by the Service
+#      Override values/dev-hub-agent-override.yaml - with the base values this
+#      hub still syncs `bootstrap/` and never sees this file.
+#   2. Every generated Application carries the Harness linking labels. The
+#      tenant file supplies them under `harness:`; the IDP request pipeline
+#      writes them together with the matching Harness GitOps Service, so the
+#      platform team sees each requested instance as a Service in
+#      harness_controllers/hub_orchistrator (Service -> linked Applications ->
+#      sync/health). Labels, NOT annotations - Harness only reads labels.
+#      The `if` guard keeps a hand-authored tenant without `harness:` valid
+#      (an empty label value is legal; `<no value>` is not).
+#
+# REQUIRES progressive syncs on this hub's ApplicationSet controller
+# (applicationsetcontroller.enable.progressive.syncs, set by the same override).
+# Without it the strategy block is accepted and SILENTLY ignored. NOT yet
+# enabled on the live Dev hub - verify argocd-cmd-params-cm before relying on
+# platform-before-instance ordering.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenants-bootstrap
+  namespace: account-agent
+spec:
+  goTemplate: true
+  # Deliberately NOT missingkey=error: one malformed tenant must not block
+  # generation for the others (see the eks-hub copy).
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - role: platform
+                  chartPath: eks-hub/charts/tenant-platform
+                  releaseSuffix: platform
+                - role: instance
+                  chartPath: charts/harness-gitops-agent-bootstrap
+                  # LOAD-BEARING: the argo-cd subchart bakes the release name
+                  # into immutable Deployment selectors. Do not change.
+                  releaseSuffix: argocd
+          - git:
+              repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+              revision: HEAD
+              files:
+                - path: gitops-demo/tenants/*/values.yaml
+  strategy:
+    type: RollingSync
+    rollingSync:
+      steps:
+        - matchExpressions:
+            - key: role
+              operator: In
+              values: [platform]
+        - matchExpressions:
+            - key: role
+              operator: In
+              values: [instance]
+  template:
+    metadata:
+      name: '{{.team}}-{{.role}}'
+      labels:
+        role: '{{.role}}'
+        team: '{{.team}}'
+        app.kubernetes.io/part-of: tenant-platform
+        # Harness Service / Environment linkage (docs: gitops-entities/service
+        # "Linking Applications to a Service"). Values come from the tenant
+        # file's `harness:` block, written by the IDP request pipeline.
+        harness.io/serviceRef: '{{ if .harness }}{{ .harness.serviceRef }}{{ end }}'
+        harness.io/envRef: '{{ if .harness }}{{ .harness.envRef }}{{ end }}'
+    spec:
+      project: default
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.argocdNamespace}}'
+      sources:
+        # Values-only reference so `$values` resolves from the repo root.
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          ref: values
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          path: '{{.chartPath}}'
+          helm:
+            releaseName: '{{.team}}-{{.releaseSuffix}}'
+            valueFiles:
+              - '$values/gitops-demo/tenants/{{.team}}/values.yaml'
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # NO PRUNE, by decision (2026-08-03): removing a namespace from a
+          # tenant's values must never delete workloads by itself.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          backoff:
+            duration: 1m
+          limit: 20

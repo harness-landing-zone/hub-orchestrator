@@ -1,0 +1,23 @@
+# Deploy target for the ACCOUNT-scoped agent on the Dev (k3d) hub.
+# Captured from the live entity created 2026-08-31.
+#
+# Same identifier as the EKS hub's infrastructure on purpose - they are told
+# apart by environmentRef (Dev = k3d, hub = EKS), which is what lets
+# hub_bootstrap_cd stay one pipeline.
+#
+# connectorRef localhubcluster is a K8sCluster connector using
+# InheritFromDelegate, pinned to delegate tag gitops-demo-delegate (the delegate
+# running inside this k3d cluster).
+infrastructureDefinition:
+  name: account-admin-agent
+  identifier: accountadminagent
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  environmentRef: Dev
+  deploymentType: Kubernetes
+  type: KubernetesDirect
+  spec:
+    connectorRef: localhubcluster
+    namespace: account-agent
+    releaseName: release-<+INFRA_KEY_SHORT_ID>
+  allowSimultaneousDeployments: false

@@ -129,6 +129,15 @@ spec:
         role: '{{.role}}'
         team: '{{.team}}'
         app.kubernetes.io/part-of: tenant-platform
+        # Harness Service / Environment linkage. The IDP request pipeline writes
+        # a `harness:` block (serviceRef, envRef) into each tenant file together
+        # with the matching GitOps Service in harness_controllers/hub_orchistrator;
+        # Harness reads these LABELS (not annotations) when the agent syncs the
+        # Application and files it under that Service. The `if` guard keeps a
+        # hand-authored tenant without the block valid - an empty label value is
+        # legal, the literal `<no value>` is not.
+        harness.io/serviceRef: '{{ if .harness }}{{ .harness.serviceRef }}{{ end }}'
+        harness.io/envRef: '{{ if .harness }}{{ .harness.envRef }}{{ end }}'
     spec:
       project: default
       destination:

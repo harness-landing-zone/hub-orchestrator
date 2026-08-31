@@ -3,33 +3,16 @@ pipeline:
   identifier: hub_bootstrap_cd
   orgIdentifier: harness_controllers
   projectIdentifier: hub_orchistrator
-  description: >-
-    Day-0 install of the HGA controller and the ACCOUNT-scoped GitOps Agent on a
-    permanent bootstrap cluster. Everything beyond this agent is bootstrapped
-    through GitOps.
-
-    Deliberately cluster-agnostic: the environment and infrastructure are runtime
-    inputs, so bootstrapping a second permanent cluster is selecting a different
-    Infrastructure rather than cloning this pipeline. That indirection is the
-    difference between a platform pipeline and a demo one.
+  description: |-
+    Day-0 install of the HGA controller and the ACCOUNT-scoped GitOps Agent on a permanent bootstrap cluster. Everything beyond this agent is bootstrapped through GitOps.
+    Deliberately cluster-agnostic: environment, infrastructure and the in-cluster delegate are runtime inputs for BOTH stages, so bootstrapping a second permanent cluster (the gitops-demo k3d hub, environment Dev) is selecting a different Infrastructure plus the Service Overrides that give that hub its own agent identity - not cloning this pipeline.
   tags:
     purpose: platform-cd
     tier: bootstrap-0
   variables:
-    - name: chart_ref
-      type: String
-      description: >-
-        Git commit SHA (40 hex) or semantic tag vX.Y.Z in the hga-bootstrap
-        chart repo. Drives both chart fetches so controller and agent always
-        come from one tree.
-      required: true
-      value: <+input>
     - name: image_tag
       type: String
-      description: >-
-        Published controller image tag on Docker Hub — a commit SHA from main CI
-        or a promoted semantic tag. Decoupled from chart_ref because chart and
-        image do not publish from the same merge.
+      description: Published controller image tag on Docker Hub — a commit SHA from main CI or a promoted semantic tag. Decoupled from chart_ref because chart and image do not publish from the same merge.
       required: true
       value: <+input>
     - name: deploy_agent
@@ -37,7 +20,11 @@ pipeline:
       description: Set false to install only the controller — useful when recovering a cluster whose agent is already registered.
       required: true
       value: <+input>.default(true).allowedValues(true,false)
-
+    - name: delegate_selector
+      type: String
+      description: Tag of the delegate running INSIDE the target cluster. The verify step is pinned to it because a ShellScript step does not inherit the infrastructure connector's delegate (B13).
+      required: true
+      value: <+input>.default(eks-delegate).allowedValues(eks-delegate,gitops-demo-delegate)
   stages:
     - stage:
         name: Deploy Controller
@@ -52,15 +39,6 @@ pipeline:
               serviceDefinition:
                 type: NativeHelm
                 spec:
-                  manifests:
-                    - manifest:
-                        identifier: controller_chart
-                        type: HelmChart
-                        spec:
-                          store:
-                            type: Github
-                            spec:
-                              commitId: <+pipeline.variables.chart_ref>
                   artifacts:
                     primary:
                       primaryArtifactRef: controller_image
@@ -72,35 +50,11 @@ pipeline:
           environment:
             environmentRef: <+input>
             deployToAll: false
+            environmentInputs: <+input>
+            serviceOverrideInputs: <+input>
             infrastructureDefinitions: <+input>
           execution:
             steps:
-              - step:
-                  type: ShellScript
-                  name: Validate Refs
-                  identifier: validate_refs
-                  description: Fail fast on a malformed ref rather than after a five-minute helm timeout.
-                  spec:
-                    shell: Bash
-                    onDelegate: true
-                    source:
-                      type: Inline
-                      spec:
-                        script: |-
-                          set -euo pipefail
-                          printf '%s\n' "$CHART_REF" | grep -Eq \
-                            '^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?|[0-9a-f]{40})$'
-                          printf '%s\n' "$IMAGE_TAG" | grep -Eq \
-                            '^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?|[0-9a-f]{40})$'
-                    environmentVariables:
-                      - name: CHART_REF
-                        type: String
-                        value: <+pipeline.variables.chart_ref>
-                      - name: IMAGE_TAG
-                        type: String
-                        value: <+pipeline.variables.image_tag>
-                    outputVariables: []
-                  timeout: 2m
               - step:
                   type: HelmDeploy
                   name: Deploy Controller with Helm
@@ -111,9 +65,9 @@ pipeline:
                     useUpgradeInstall: true
                     commandFlags:
                       - commandType: Install
-                        flag: --create-namespace --wait --timeout 5m
+                        flag: "--create-namespace --wait --timeout 5m"
                       - commandType: Upgrade
-                        flag: --create-namespace --wait --timeout 5m
+                        flag: "--create-namespace --wait --timeout 5m"
                   timeout: 10m
             rollbackSteps:
               - step:
@@ -129,15 +83,12 @@ pipeline:
                 - AllErrors
               action:
                 type: StageRollback
-
     - stage:
         name: Deploy Account Agent
         identifier: deploy_account_agent
-        description: >-
-          Install or upgrade the day-0 ACCOUNT-scoped agent. The bootstrap chart
-          creates the HarnessGitopsAgent CR, the controller registers it with
-          Harness and writes the token Secret, and the gitops-helm runtime
-          consumes that Secret.
+        description: |-
+          Install or upgrade the day-0 ACCOUNT-scoped agent. The bootstrap chart creates the HarnessGitopsAgent CR, the controller registers it with Harness and writes the token Secret, and the gitops-helm runtime consumes that Secret.
+          Environment and infrastructure are runtime inputs (they used to be pinned to hub / accountadminagent). A non-EKS hub MUST come with a Service Override on hub_account_agent for that environment/infrastructure that changes agent_identifier, agent_name and token_secret and adds its values override file (values/gitops-demo-agent-override.yaml) - otherwise the install registers a second agent under the EKS hub's identifier.
         type: Deployment
         when:
           pipelineStatus: Success
@@ -146,22 +97,11 @@ pipeline:
           deploymentType: NativeHelm
           service:
             serviceRef: hub_account_agent
-            serviceInputs:
-              serviceDefinition:
-                type: NativeHelm
-                spec:
-                  manifests:
-                    - manifest:
-                        identifier: agent_bootstrap_chart
-                        type: HelmChart
-                        spec:
-                          store:
-                            type: Github
-                            spec:
-                              commitId: <+pipeline.variables.chart_ref>
           environment:
             environmentRef: <+input>
             deployToAll: false
+            environmentInputs: <+input>
+            serviceOverrideInputs: <+input>
             infrastructureDefinitions: <+input>
           execution:
             steps:
@@ -175,37 +115,23 @@ pipeline:
                     useUpgradeInstall: true
                     commandFlags:
                       - commandType: Install
-                        flag: --create-namespace --wait --timeout 10m
+                        flag: "--create-namespace --wait --timeout 10m"
                       - commandType: Upgrade
-                        flag: --create-namespace --wait --timeout 10m
+                        flag: "--create-namespace --wait --timeout 10m"
                   timeout: 15m
               - step:
                   type: ShellScript
                   name: Verify Agent Registration
                   identifier: verify_agent_registration
-                  description: >-
-                    Helm reporting success only means the pods are steady. It says
-                    nothing about whether the controller actually registered the
-                    agent with Harness or recorded its project mapping — the two
-                    things this stage exists to achieve. Without this step a
-                    half-registered agent looks like a green pipeline.
-
-                    Requires the delegate's service account to be able to read
-                    HarnessGitopsAgent resources; if it cannot, this fails with a
-                    Forbidden rather than a timeout, which is the useful error.
-
-                    delegateSelectors pins this step to the delegate inside the
-                    target cluster. A ShellScript step does NOT inherit the
-                    infrastructure connector's delegate: unpinned, it runs on
-                    whichever delegate answers — one 2026-07-29 run landed on a
-                    delegate on a different cluster, burned its timeouts on a
-                    cluster with no CRD, and the failure strategy rolled back a
-                    correct deployment (B13).
+                  description: |-
+                    Helm reporting success only means the pods are steady. It says nothing about whether the controller actually registered the agent with Harness or recorded its project mapping — the two things this stage exists to achieve. Without this step a half-registered agent looks like a green pipeline.
+                    Waits for status.agentIdentifier on the HarnessGitopsAgent, then for condition Ready on every HarnessGitopsProjectMapping in the namespace (the condition the installed controller actually emits; the former MappingReady wait never returned). Prints the agent's conditions either way so a failure is diagnosable from the log.
+                    Requires the delegate's service account to be able to read HarnessGitopsAgent / HarnessGitopsProjectMapping resources; if it cannot, this fails with a Forbidden rather than a timeout, which is the useful error.
                   spec:
                     shell: Bash
                     onDelegate: true
                     delegateSelectors:
-                      - local-server-delegate
+                      - <+pipeline.variables.delegate_selector>
                     source:
                       type: Inline
                       spec:
@@ -226,18 +152,20 @@ pipeline:
                             exit 1
                           fi
                           echo "registered as: $AGENT_ID"
+                          echo "agent conditions:"
+                          kubectl -n "$NS" get harnessgitopsagent "$NAME" \
+                            -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}' || true
 
-                          echo "waiting for MappingReady..."
-                          if ! kubectl -n "$NS" wait "harnessgitopsagent/$NAME" \
-                               --for=condition=MappingReady --timeout=5m; then
-                            echo "FAILED: MappingReady never became True. Conditions:"
-                            kubectl -n "$NS" get harnessgitopsagent "$NAME" \
-                              -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}){"\n"}{end}' || true
-                            echo "AgentNotHealthy here means the runtime is not connected to Harness;"
-                            echo "MappingVerificationFailed means it connected but the mapping did not verify."
+                          echo "waiting for every project mapping in $NS to become Ready..."
+                          if ! kubectl -n "$NS" wait harnessgitopsprojectmapping --all \
+                               --for=condition=Ready --timeout=5m; then
+                            echo "FAILED: a HarnessGitopsProjectMapping never became Ready. Conditions:"
+                            kubectl -n "$NS" get harnessgitopsprojectmapping \
+                              -o jsonpath='{range .items[*]}{.metadata.name}: {range .status.conditions[*]}{.type}={.status} ({.reason}) {end}{"\n"}{end}' || true
+                            echo "AgentNotHealthy means the runtime is not CONNECTED in Harness; MappingVerificationFailed means it connected but the mapping did not verify."
                             exit 1
                           fi
-                          echo "agent registered and mapping verified."
+                          echo "agent registered and all mappings verified."
                     environmentVariables:
                       - name: NS
                         type: String
@@ -264,3 +192,4 @@ pipeline:
                 - AllErrors
               action:
                 type: StageRollback
+  allowStageExecutions: true

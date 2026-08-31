@@ -1,0 +1,17 @@
+# Harness environment for the local k3d hub `gitops-demo`.
+# Captured from the live entity (created 2026-08-31) so another checkout
+# reproduces it. PreProduction on purpose: this hub exists to prove the tenant
+# request flow, not to host anything durable.
+#
+# Infrastructures under it (see ../infrastructure/dev_*.yaml):
+#   hubhgasystem     -> namespace hga-system      (HGA controller)
+#   accountadminagent -> namespace account-agent  (ACCOUNT-scoped agent dev_hub_account_agent)
+#
+# The identifiers deliberately match the ones under environment `hub` (EKS), so
+# one pipeline run differs only by which Environment + Infrastructure is chosen.
+environment:
+  name: Dev
+  identifier: Dev
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  type: PreProduction

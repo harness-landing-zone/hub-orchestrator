@@ -1,0 +1,15 @@
+# Deploy target for the HGA controller on the Dev (k3d) hub.
+# Captured from the live entity created 2026-08-31.
+infrastructureDefinition:
+  name: hub-hga-system
+  identifier: hubhgasystem
+  orgIdentifier: harness_controllers
+  projectIdentifier: hub_orchistrator
+  environmentRef: Dev
+  deploymentType: Kubernetes
+  type: KubernetesDirect
+  spec:
+    connectorRef: localhubcluster
+    namespace: hga-system
+    releaseName: release-<+INFRA_KEY_SHORT_ID>
+  allowSimultaneousDeployments: false

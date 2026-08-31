@@ -1,0 +1,44 @@
+# OVERRIDE values for the Dev hub (local k3d cluster `gitops-demo`, Harness
+# environment Dev, infrastructure accountadminagent, namespace account-agent,
+# agent dev_hub_account_agent).
+#
+# Applied ON TOP of the base agent values by a Harness Service Override on
+# service hub_account_agent scoped to that environment/infrastructure. One
+# Service, two infrastructures (Dev = k3d, hub = EKS): everything true of every
+# hub stays in the base file, only what differs per hub lives here.
+#
+# WHY IT IS NEEDED
+# The Dev agent is currently installed with the base values, so its root
+# ApplicationSet syncs `bootstrap/` - the EKS/homelab folder. Every
+# ApplicationSet in there hardcodes `namespace: hub-account-agent` (a namespace
+# that exists on neither hub any more) and selects `fleet_member: hub-cluster`,
+# which the k3d cluster Secret also carries. Result today: root Application
+# cluster-application-sets is OutOfSync / Missing, and monitoring, ingress-nginx
+# and cert-manager would target this laptop cluster if it ever did sync.
+#
+# Pointing this hub at its own flat folder fixes both: gitops-demo/bootstrap
+# holds exactly one file, the tenants-bootstrap ApplicationSet that turns each
+# gitops-demo/tenants/<org>/values.yaml into a confined tenant Argo instance.
+#
+# Deliberately NOT overridden:
+#   hubCluster.name / fleetMember - the k3d cluster Secret is already registered
+#   as `hub-cluster` (Harness GitOps cluster `hubcluster` under agent
+#   account.dev_hub_account_agent). Renaming it now would orphan that
+#   registration for no gain: each hub's Argo only ever sees its own Secret, so
+#   the shared name cannot collide.
+#   rootAppSet.name - keeping `cluster-application-sets` repoints the EXISTING
+#   root Application instead of leaving an orphan behind.
+rootAppSet:
+  path: gitops-demo/bootstrap
+
+gitopsAgent:
+  argo-cd:
+    configs:
+      params:
+        # tenants-bootstrap orders platform-before-instance with
+        # strategy: RollingSync. Without this flag the strategy is accepted into
+        # the manifest and SILENTLY ignored - no error, no ordering, and the
+        # tenant's Argo instance can install before the namespaces and Roles it
+        # needs exist. The EKS hub needs the same line
+        # (patches/hub-orchestrator-account-tenant-bootstrap.patch in harness-idp).
+        applicationsetcontroller.enable.progressive.syncs: "true"
