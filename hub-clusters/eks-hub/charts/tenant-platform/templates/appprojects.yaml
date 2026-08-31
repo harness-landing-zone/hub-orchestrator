@@ -1,0 +1,68 @@
+{{- include "tenant-platform.validate" . -}}
+{{- /*
+WALL 3 - hygiene, explicitly NOT load-bearing.
+
+An AppProject is policy Argo applies to itself. If it were the only wall, an
+edit to it would be an escape. It is not: WALL 1 (Roles) and WALL 2 (the
+restricted destination) both hold independently, and the NatWest POC proved it
+by deliberately opening the project and watching the sync still fail on
+Kubernetes RBAC.
+
+What it buys is a clean early error instead of a confusing 403 halfway through a
+sync, and a NAMED project for the Harness project mapping to bind to.
+
+Deliberately NOT a helm hook. The bootstrap chart's appProject template still
+carries helm.sh/hook with hook-delete-policy: before-hook-creation (BUGS B15),
+and Argo translates helm hooks into sync hooks - so that object is deleted and
+recreated on EVERY sync, and Applications filed under it cannot be validated
+during the gap. Here it is an ordinary resource that Argo manages normally.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.projectName }}
+  namespace: {{ .Values.argocdNamespace | quote }}
+  labels:
+    {{- include "tenant-platform.labels" . | nindent 4 }}
+spec:
+  description: >-
+    Tenant {{ .Values.team }} - confined to {{ join ", " .Values.workloadNamespaces }}.
+  sourceRepos:
+{{- if .Values.sourceRepos }}
+    {{- toYaml .Values.sourceRepos | nindent 4 }}
+{{- else }}
+    []
+{{- end }}
+  destinations:
+{{- range .Values.workloadNamespaces }}
+    # BY NAME - the declared restricted cluster Secret, not the implicit
+    # in-cluster destination, which is disabled.
+    - name: {{ $.Values.team }}-in-cluster
+      namespace: {{ . | quote }}
+{{- end }}
+  # Empty allowlist = no cluster-scoped resource may ever be managed by this
+  # project. Pairs with clusterResources:"false" on the destination.
+  clusterResourceWhitelist: []
+{{- if .Values.lockDefaultProject }}
+---
+{{- /*
+Argo auto-creates a wide-open 'default' AppProject in every instance namespace
+('*' for sources, destinations and cluster resources). Left alone it is a
+standing bypass of the project above, so it is neutered here to deny everything.
+
+Do NOT map this project to a Harness project - leave it unmapped so nothing can
+be filed under it by accident.
+*/}}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: {{ .Values.argocdNamespace | quote }}
+  labels:
+    {{- include "tenant-platform.labels" . | nindent 4 }}
+spec:
+  description: Deny-all. Neutered by the platform - use the tenant project instead.
+  sourceRepos: []
+  destinations: []
+  clusterResourceWhitelist: []
+{{- end }}

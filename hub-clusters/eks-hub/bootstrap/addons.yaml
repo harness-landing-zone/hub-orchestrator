@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: addons
+  namespace: gitopsdemo-org-agent
+spec:
+  goTemplate: true
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            fleet_member: hub-cluster
+  template:
+    metadata:
+      name: 'addons-{{.name}}'
+      labels:
+        harness.io/serviceRef: 'gitopsaddons'
+        harness.io/envRef: '{{.metadata.labels.harness_env_ref}}'
+    spec:
+      project: default
+      destination:
+        name: '{{.name}}'
+        namespace: gitopsdemo-org-agent
+      source:
+        repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+        path: charts/application-sets
+        targetRevision: main
+        helm:
+          releaseName: addons
+          valuesObject:
+            namespace: gitopsdemo-org-agent
+            releaseName: default
+            mergeValues:
+              addons:
+                use: true
+            applicationSetGroup: addons
+            useSelectors: "true"
+            globalSelectors:
+              fleet_member: hub-cluster
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: false
+        syncOptions:
+          - CreateNamespace=true

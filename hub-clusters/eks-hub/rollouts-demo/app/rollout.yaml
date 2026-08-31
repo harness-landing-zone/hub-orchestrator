@@ -1,0 +1,115 @@
+# Argo Rollouts demo workload for tenant team1.
+#
+# A Rollout, NOT a Deployment. The Rollout CRD (rollouts.argoproj.io) is
+# CLUSTER-SCOPED and is installed by the PLATFORM, never by this tenant -
+# see ../platform/argo-rollouts-application.yaml and the README. Until that
+# Application is synced, this manifest fails to apply with
+#   no matches for kind "Rollout" in version "argoproj.io/v1alpha1"
+# which is the correct and honest error.
+#
+# STRATEGY: basic (replica-based) canary, deliberately WITHOUT trafficRouting.
+#   - trafficRouting needs an ingress controller or a service mesh. The tenant
+#     has neither and cannot install one: every candidate (NGINX ingress class,
+#     Istio, SMI) needs cluster-scoped objects and this tenant holds ZERO
+#     ClusterRoles.
+#   - Without a router, the single Service below selects BOTH the stable and
+#     the canary ReplicaSet, so traffic splits roughly by pod count. setWeight
+#     therefore moves real traffic with nothing but ReplicaSet arithmetic.
+#   - The rollouts controller then only needs to write ReplicaSets and pods in
+#     this namespace. It never has to patch a Service selector (which
+#     canary+services or blueGreen would require).
+#
+# The `pause: {}` steps are INDEFINITE on purpose. They are the pipeline's
+# control points: each one parks the Rollout in Argo CD health
+# Suspended / "CanaryPauseStep", which is exactly what the Harness GitOps
+# Rollout step waits on before issuing `resume`. A `pause: {duration: ...}`
+# would self-promote and the pipeline would be a spectator.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-demo
+  labels:
+    app.kubernetes.io/name: rollouts-demo
+    app.kubernetes.io/part-of: team1-rollouts-demo
+    team: team1
+spec:
+  # 4 replicas makes the weights land on whole pods: 25% = 1, 50% = 2, 100% = 4.
+  replicas: 4
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: rollouts-demo
+  template:
+    metadata:
+      labels:
+        app: rollouts-demo
+    spec:
+      # team1-dev is labelled pod-security.kubernetes.io/enforce=baseline with
+      # warn/audit=restricted (charts/tenant-platform values). This pod spec is
+      # written to satisfy RESTRICTED so the namespace emits no warnings at all:
+      # runAsNonRoot + RuntimeDefault seccomp + drop ALL + no privilege
+      # escalation. PSA is the one dimension RBAC does not cover - RBAC bounds
+      # what the controller may CREATE, PSA bounds what the pods may DO.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rollouts-demo
+          # Public image, no pull secret, no tenant registry credential. The
+          # colour tags (blue/green/yellow/orange/red/purple) make the canary
+          # visible in a browser; the bad-* tags fail readiness on purpose and
+          # are the fastest way to prove the abort path.
+          #
+          # NO `docker.io/` PREFIX, AND THAT IS NOT COSMETIC. Kustomize matches
+          # image overrides on the image name EXACTLY as written here. The
+          # pipeline's UpdateGitOpsApp step sends `argoproj/rollouts-demo:<tag>`,
+          # so writing `docker.io/argoproj/rollouts-demo` here makes the override
+          # a SILENT NO-OP: the step succeeds, the sync succeeds, and the old
+          # image keeps running. Verified with `kubectl kustomize`: with the
+          # prefix the tag never changes; without it, it does.
+          image: argoproj/rollouts-demo:blue
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+  strategy:
+    canary:
+      maxSurge: 1
+      maxUnavailable: 0
+      steps:
+        - setWeight: 25
+        # Control point 1 -> Harness step Resume_First_Canary_Pause
+        - pause: {}
+        - setWeight: 50
+        # Control point 2 -> Harness step Resume_Second_Canary_Pause
+        - pause: {}
+        - setWeight: 100

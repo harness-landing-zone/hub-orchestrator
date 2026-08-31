@@ -1,0 +1,333 @@
+# Tenant: team1
+#
+# ONE file describes the whole tenant, consumed by TWO charts that ignore each
+# other's keys - the same pattern as fleet-members/hub-cluster/eks-hub.yaml:
+#
+#   charts/tenant-platform            the CONFINEMENT half (platform-applied)
+#   charts/harness-gitops-agent-bootstrap   the INSTANCE half (namespaced Argo
+#                                           + Harness agent)
+#
+# Onboarding a workload namespace later is one line in workloadNamespaces: it
+# extends the Roles AND the cluster Secret allowlist together, so they cannot
+# drift apart.
+
+# ---------------------------------------------------------------------------
+# charts/tenant-platform  -  the walls
+# ---------------------------------------------------------------------------
+team: team1
+
+# The instance namespace. Deliberately absent from workloadNamespaces below -
+# the platform owns the instance, and making it a deploy target would hand the
+# tenant write access to its own Argo CD's config and RBAC. The chart hard-fails
+# if it appears in both.
+argocdNamespace: team1-argo
+
+workloadNamespaces:
+  - team1-dev
+  - team1-prod
+
+# The Argo AppProject mapped to Harness gitopsdemo/selfmanagedargo below.
+projectName: team1
+
+# PUBLIC REPOS ONLY, and that is load-bearing rather than incidental. No
+# credential means no repository Secret, which means no <+secrets.getValue(...)>
+# anywhere in this file, which is what lets ../../applications/team1-instance.yaml
+# stay on a plain helm source instead of a plugin one. Adding a PRIVATE repo here
+# drags the whole CMP path back - and that path is currently broken on this hub.
+#
+# ADMISSION AND ACCESS ARE TWO DIFFERENT GATES, and this list is only the first.
+# sourceRepos is checked when an Application is CREATED; a repo missing from it
+# is rejected on admission and the failure reads like a broken repo rather than a
+# policy decision. For a PUBLIC repo, passing this gate is sufficient: the
+# tenant's Argo fetches anonymously and needs no repository Secret at all.
+sourceRepos:
+  - https://github.com/argoproj/argocd-example-apps.git
+  # The app team's own repo - the podinfo chart, its Argo Rollouts canary, and
+  # the ApplicationSet that files one Application per environment. Public on
+  # purpose: it REMOVES risk R3 (tenant read access to the whole hub-orchestrator
+  # monorepo) rather than accepting it, because there is no longer a private repo
+  # in the tenant's path. Verified anonymously reachable over HTTPS, which is the
+  # protocol the tenant's Argo uses - an SSH clone locally proves nothing here.
+  - https://github.com/harness-landing-zone/pod-info-demo
+
+# Pod Security Admission - the dimension RBAC does not cover. RBAC bounds what
+# the controller may CREATE; PSA bounds what the resulting pods may DO.
+namespaceLabels:
+  pod-security.kubernetes.io/enforce: baseline
+  pod-security.kubernetes.io/audit: restricted
+  pod-security.kubernetes.io/warn: restricted
+
+# Second dial, off. The namespace is already the wall. Turning this on REQUIRES
+# setting resource.inclusions to the same list - see charts/tenant-platform.
+deployableKinds:
+  enabled: false
+  rules: []
+
+# ON for this tenant - team1 runs the Argo Rollouts canary demo, and the Harness
+# GitOps Rollout step's actions (resume/abort) are executed by argocd-server,
+# which the base Role leaves read-only. Adds patch on argoproj.io rollouts
+# (+ /status) in team1-dev and team1-prod, nowhere else.
+#
+# Requires the platform addon in ../../applications/argo-rollouts.yaml - the CRDs
+# are cluster-scoped and this tenant cannot install them.
+#
+# If deployableKinds is ever switched on, its rules MUST include
+# argoproj.io/rollouts; the chart hard-fails the render otherwise.
+rolloutActions:
+  enabled: true
+
+lockDefaultProject: true
+
+# ---------------------------------------------------------------------------
+# charts/harness-gitops-agent-bootstrap  -  the instance
+# ---------------------------------------------------------------------------
+harnessAgent:
+  enabled: true
+  metadata:
+    name: team1-argo-agent
+  spec:
+    name: team1-argo-agent
+    # PROJECT scope is what makes this the TENANT's agent rather than another
+    # platform one. projectIdentifier is required at this scope.
+    scope: PROJECT
+    orgId: gitopsdemo
+    projectId: selfmanagedargo
+    # Reuses the key the platform already placed in hga-system (keep: true) for
+    # the member bootstrap. The controller resolves it from
+    # --api-key-secret-namespace, NOT from the CR's namespace, so nothing needs
+    # to exist in team1-argo.
+    #
+    # NOTE this is an ORG-admin key. Safe here ONLY because the PLATFORM files
+    # this CR. If tenants are ever allowed to create their own
+    # HarnessGitopsAgent CRs, this becomes a per-tenant scoped key or the model
+    # breaks - see R2 in ../../self-managed-argo-architecture.txt.
+    apiKeySecretRef: gitopsdemo-api-key
+    # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
+    # hard-fails otherwise. Out of step and gitops-helm creates its own Secret
+    # from a blank default: the agent runs with an empty token, never connects,
+    # and reports failure for entirely the wrong reason.
+    tokenSecretRef: team1-argo-agent-token
+  apiKeySecret:
+    # The platform's key already exists in hga-system. Creating a second copy
+    # here would put an org-admin credential inside the tenant's namespace,
+    # which is exactly what this model is trying to avoid.
+    create: false
+  # NO gitSecret, DELIBERATELY. It existed only to give this tenant's Argo read
+  # access to the PRIVATE hub-orchestrator monorepo, and it carried a
+  # <+secrets.getValue(...)> expression for the GitHub App key - which is what
+  # forced ../../applications/team1-instance.yaml onto a plugin source and, with
+  # the EKS hub's CMP sidecar missing its helm and argocd-harness-plugin
+  # binaries, stopped that Application rendering at all.
+  #
+  # The workload now lives in a PUBLIC repo (see sourceRepos above), so the
+  # tenant's Argo fetches anonymously and needs no repository Secret. Restoring
+  # this block means restoring the plugin source with it - do not add one back
+  # without also fixing the sidecar.
+  #
+  # Note the chart guards this block with `if and $git $git.create`, so its eight
+  # githubApp* validations are skipped entirely when the key is absent.
+
+gitopsAgent:
+  enabled: true
+  # Same pin as the platform agent, for the same reason: gitops-helm 1.2.7
+  # defaults to Argo v2.14.9, whose schema predates .status.terminatingReplicas
+  # (Kubernetes 1.33+), and this cluster is 1.36. Left at the default, this
+  # tenant instance comes up fine and then fails COMPARISON on every workload it
+  # deploys into team1-dev / team1-prod.
+  #
+  # Keep this in step with fleet-members/hub-cluster/eks-hub.yaml. Both Argos on
+  # this cluster share one set of cluster-scoped CRDs, so letting them drift is
+  # how the tenant ends up reconciling against CRDs it does not agree with.
+  global:
+    image:
+      tag: v3.3.10
+  harness:
+    # THE namespaced switch. false drops the three '*'/'*' cluster-admin
+    # ClusterRoles (application-controller, repo-server, gitops-agent). The
+    # bundled argo-cd subchart still renders its namespaced Roles, so the
+    # instance is complete - verified: 6 Roles + 6 RoleBindings, 0 ClusterRoles.
+    createClusterRoles: false
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    identity:
+      accountIdentifier: qIYsos1ZQO6fJMG1Ip6KJA
+      orgIdentifier: gitopsdemo
+      # Required at PROJECT scope, and must match spec.projectId above.
+      projectIdentifier: selfmanagedargo
+      agentIdentifier: team1_argo_agent
+    # Brings this tenant to PARITY with the org agent
+    # (fleet-members/hub-cluster/eks-hub.yaml sets the same flag). gitops-helm
+    # defaults it to FALSE, and false renders a STUB ConfigManagementPlugin -
+    # `discover.find` is `exit 1` and `generate` is `exit 0`, so the plugin is
+    # installed and silently produces nothing. Nothing in the rendered manifest
+    # says "disabled"; you only see it by reading the argocd-harness-plugin
+    # ConfigMap on the cluster.
+    #
+    # PARITY IS NOT FUNCTION. Verified 2026-08-04 on eks-hub: the CMP's generate
+    # command runs INSIDE the argocd-harness-plugin sidecar and shells out to
+    # `helm template ... | argocd-harness-plugin generate -`, but that sidecar
+    # (harness/gitops-agent-installer-helper:v0.0.3) contains NEITHER binary
+    # anywhere on disk. Real helm v3.19.4 lives only in the repo-server
+    # container, and the sops-helm-secrets-tool init container stages its tools
+    # into the `helm-sops-tools` volume, which the sidecar never mounts. So the
+    # ORG agent is in this same enabled-but-inert state, which is why the gap
+    # went unnoticed - no Application on this cluster uses a plugin source.
+    #
+    # Consequence: turning this on grants INTENT, not capability. Do not read a
+    # working expression/secret-injection path into it until the sidecar
+    # actually carries the binaries.
+    argocdHarnessPlugin:
+      enabled: true
+  agent:
+    harnessName: team1-argo-agent
+    existingSecrets:
+      agentToken: team1-argo-agent-token
+  argo-cd:
+    # Harness IDP queries this Argo instance through the in-cluster delegate.
+    # Keep the API server running and expose a read-only local API account.
+    server:
+      replicas: 1
+      serviceAccount:
+        create: true
+    # ---- CMP SIDECAR IMAGE OVERRIDE -------------------------------------
+    # WITHOUT THIS, argocdHarnessPlugin.enabled ABOVE IS DECORATIVE.
+    #
+    # gitops-helm 1.2.7 pins harness/gitops-agent-installer-helper:v0.0.3 -
+    # published 2024-12-26, 35.7 MB - and that image contains NEITHER `helm`
+    # NOR `argocd-harness-plugin` anywhere on disk (verified by a full-filesystem
+    # find inside the running sidecar, 2026-08-04). The plugin ConfigMap the
+    # same chart renders calls exactly those two binaries:
+    #     helm template ... | argocd-harness-plugin generate -
+    # so the CMP cannot execute. The org agent is in this same state and nobody
+    # noticed, because no Application on this cluster uses a plugin source.
+    #
+    # v0.0.18 (2026-07-31, 142 MB) carries both at /usr/local/bin - verified by
+    # running the image on eks-hub, not inferred from the size jump.
+    #
+    # HELM REPLACES LISTS, IT DOES NOT MERGE THEM. Both blocks below are
+    # therefore FULL COPIES of the chart's own values with only the image tag
+    # changed. They will silently drift when gitops-helm is upgraded - re-diff
+    # against the subchart's values.yaml on every bump, or a future fix lands
+    # upstream and we keep overriding it with a stale copy.
+    #
+    # NOT applied to the org agent (fleet-members/hub-cluster/eks-hub.yaml)
+    # deliberately: that is the platform's own instance and a 15-version image
+    # jump there is a separate decision with a much larger blast radius.
+    repoServer:
+      initContainers:
+        - name: sops-helm-secrets-tool
+          image: harness/gitops-agent-installer-helper:v0.0.18
+          imagePullPolicy: IfNotPresent
+          command: [ sh, -ec ]
+          args:
+            - |
+              cp -r /custom-tools/. /helm-sops-tools
+              cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm
+              mkdir -p /helm-sops-tools/helm-secrets && cp /helm-sops-tools/helm-plugins/helm-secrets/scripts/wrapper/helm.sh /helm-sops-tools/helm-secrets/helm
+              chmod +x /helm-sops-tools/helm-secrets/*
+              chmod +x /helm-sops-tools/*
+          volumeMounts:
+            - mountPath: /helm-sops-tools
+              name: helm-sops-tools
+      extraContainers:
+        - command: [ /var/run/argocd/argocd-cmp-server ]
+          image: harness/gitops-agent-installer-helper:v0.0.18
+          imagePullPolicy: IfNotPresent
+          name: argocd-harness-plugin
+          resources:
+            limits:
+              cpu: "0.5"
+              memory: 512Mi
+            requests:
+              cpu: "0.5"
+              memory: 512Mi
+          securityContext:
+            capabilities:
+              drop:
+                - NET_RAW
+            runAsGroup: 999
+            runAsUser: 999
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /var/run/argocd
+              name: var-files
+            - mountPath: /home/argocd/cmp-server/plugins
+              name: plugins
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              name: argocd-harness-plugin
+              subPath: harness.yaml
+    crds:
+      # The platform bundle owns the CRDs - they are cluster-scoped and shared
+      # with the platform instance. A tenant-driven CRD change would hit the
+      # platform too.
+      install: false
+      keep: true
+    configs:
+      params:
+        server.insecure: "true"
+      rbac:
+        policy.csv: |
+          g, idp, role:readonly
+      cm:
+        accounts.idp: apiKey, login
+        # TRUE, and the "false" that used to be here did NOT do what the comment
+        # below it claimed. Argo identifies the in-cluster destination by SERVER
+        # ADDRESS, not by name - so cluster.inClusterEnabled: "false" disables
+        # EVERY cluster whose server is https://kubernetes.default.svc,
+        # including the explicitly declared, namespace-restricted
+        # team1-in-cluster Secret that tenant-platform creates. The declared
+        # Secret cannot be a "replacement" for the implicit destination: they are
+        # the same address, and the switch is address-based.
+        #
+        # Symptom when this was "false": the Secret exists and Harness even
+        # registers the cluster (team1incluster), but Argo's own resolver returns
+        # nothing, so anything targeting it fails with
+        #   "application destination spec is invalid: there are no clusters with
+        #    this name: team1-in-cluster"
+        # The ApplicationSet reports ParametersGenerated: True and then refuses
+        # to create the Applications - generation is fine, VALIDATION is not.
+        # Harness documents the same failure from the registration side:
+        # developer-hub .../gitops/resources/gitops-faqs.md - "cannot register
+        # cluster: in-cluster has been disabled" -> set this to 'true'.
+        #
+        # WHAT THIS COSTS. A second destination named `in-cluster` now exists,
+        # with no namespace allowlist. Confinement therefore rests on:
+        #   WALL 1 (Roles)      unchanged and absolute - zero ClusterRoles, Roles
+        #                       only in team1-dev/team1-prod, everything else
+        #                       403s at the Kubernetes API. Still the real
+        #                       boundary.
+        #   WALL 3 (AppProject) now load-bearing for THIS dimension: team1 lists
+        #                       destinations only as team1-in-cluster, so an
+        #                       Application naming `in-cluster` is refused at
+        #                       admission. It is no longer merely hygiene.
+        #   WALL 2 (the Secret) degraded to defence-in-depth - its namespaces
+        #                       allowlist now binds only apps that choose it.
+        #
+        # To get Wall 2 back as an INDEPENDENT wall, register the tenant's
+        # cluster under the real EKS API endpoint instead of the internal
+        # address, authenticating as the tenant's OWN
+        # argocd-application-controller ServiceAccount. Argo then treats it as a
+        # remote cluster and this flag stops applying to it. NEVER reuse the
+        # platform's cluster config for that - it carries platform credentials
+        # and would hand the tenant cluster-admin, far worse than the wall it
+        # restores. Tracked in ../../../BUGS-AND-IMPROVEMENTS.md.
+        cluster.inClusterEnabled: "true"
+
+# Maps the tenant's Argo AppProject to their Harness project, so Applications
+# filed under it appear in that project's GitOps view.
+projectMappings:
+  - name: team1-selfmanaged
+    appProject: team1
+    orgId: gitopsdemo
+    projectId: selfmanagedargo
+    autoCreateServiceEnv: false
+
+# Deliberately OFF. That template still carries helm.sh/hook with
+# hook-delete-policy: before-hook-creation (BUGS B15), and Argo translates helm
+# hooks into sync hooks - so the AppProject would be DELETED AND RECREATED on
+# every sync, and Applications filed under it cannot be validated during the
+# gap. charts/tenant-platform provides both AppProjects as ordinary resources.
+appProject:
+  enabled: false

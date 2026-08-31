@@ -1,0 +1,23 @@
+{{- include "tenant-platform.validate" . -}}
+{{- /*
+The tenant boundary. One namespace for the instance, one per environment.
+Everything the tenant ever touches lives inside these; nothing outside is even
+visible to them.
+
+Sync wave -1: these must exist before the Roles that live in them and before the
+runtime Application lands the Argo CD workload.
+*/}}
+{{- range (prepend .Values.workloadNamespaces .Values.argocdNamespace) }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . | quote }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    {{- include "tenant-platform.labels" $ | nindent 4 }}
+    {{- with $.Values.namespaceLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}

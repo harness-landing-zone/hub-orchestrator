@@ -1,0 +1,138 @@
+# TENANT BOOTSTRAP for the local-dev hub.
+#
+# Turns every hub-clusters/local-dev/tenants/<tenant>/values.yaml into two
+# Applications - <tenant>-platform (the walls) then <tenant>-instance (the
+# tenant's own namespaced Argo + Harness agent). Adding a tenant is adding a
+# file; the IDP pipeline idp_request_argo_instance writes that file.
+#
+# ---------------------------------------------------------------------------
+# THERE IS NO CLUSTER SELECTOR HERE, ON PURPOSE.
+#
+# The hub is already chosen twice before anything in this file runs:
+#   1. values/dev-hub-agent-override.yaml points THIS hub's root ApplicationSet
+#      at hub-clusters/local-dev/bootstrap, so no other hub ever syncs this file;
+#   2. this hub's Argo only holds its OWN cluster Secret, so a clusters
+#      generator could match nothing else even if we added one.
+# A third gate would be redundant and is the classic way to end up with an
+# ApplicationSet that reports "generated successfully" and produces zero
+# Applications (see charts/application-sets/README.md, "Failure modes").
+#
+# Consequence: destination is the in-cluster address. When a hub starts serving
+# tenants on SPOKE clusters, that is the change - a matrix with a clusters
+# generator plus per-cluster labels on the cluster Secrets - not before.
+# ---------------------------------------------------------------------------
+#
+# NO metadata.namespace, ALSO ON PURPOSE. Argo applies a namespace-less manifest
+# into the parent Application's destination namespace, which for the root
+# Application is the agent's own release namespace (account-agent here,
+# account-gitops-agent on EKS). That keeps this file identical across hubs apart
+# from the tenants path, instead of hardcoding an agent namespace that has
+# already drifted once.
+#
+# REQUIRES progressive syncs on this hub's ApplicationSet controller
+# (applicationsetcontroller.enable.progressive.syncs, set by the same override).
+# Without it the RollingSync strategy below is accepted and SILENTLY ignored,
+# and a tenant's Argo can install before the namespaces and Roles it needs.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenants-bootstrap
+spec:
+  goTemplate: true
+  # Deliberately NOT goTemplateOptions: missingkey=error. With it, one tenant
+  # file missing a key kills generation for EVERY tenant. Without it, that
+  # tenant renders a broken value and only its own Application is rejected.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  generators:
+    - matrix:
+        generators:
+          # The two roles. Only what differs per ROLE lives here; everything
+          # per TENANT comes from the values file below.
+          - list:
+              elements:
+                - role: platform
+                  # Shared platform chart. If tenant-platform moves up to the
+                  # repo-root charts/ folder alongside harness-gitops-agent-bootstrap,
+                  # this is the ONLY line in this file that changes.
+                  chartPath: hub-clusters/local-dev/charts/tenant-platform
+                  releaseSuffix: platform
+                - role: instance
+                  chartPath: charts/harness-gitops-agent-bootstrap
+                  # LOAD-BEARING - DO NOT CHANGE OR DROP. The argo-cd subchart
+                  # bakes app.kubernetes.io/instance into Deployment selectors,
+                  # which are immutable; renaming the release breaks the sync on
+                  # an immutable field or recreates the tenant's whole Argo.
+                  releaseSuffix: argocd
+          - git:
+              repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+              revision: HEAD
+              files:
+                - path: hub-clusters/local-dev/tenants/*/values.yaml
+  # Platform for every tenant first, and only then the instances. Each step
+  # waits for its Applications to be HEALTHY, which sync waves cannot do between
+  # ApplicationSet-generated Applications (their parent is an ApplicationSet, so
+  # there is no sync operation to order them).
+  strategy:
+    type: RollingSync
+    rollingSync:
+      steps:
+        - matchExpressions:
+            - key: role
+              operator: In
+              values: [platform]
+        - matchExpressions:
+            - key: role
+              operator: In
+              values: [instance]
+  template:
+    metadata:
+      name: '{{.team}}-{{.role}}'
+      labels:
+        # role is what the RollingSync steps match on. Without it the steps
+        # match nothing and the ordering silently does not happen.
+        role: '{{.role}}'
+        team: '{{.team}}'
+        app.kubernetes.io/part-of: tenant-platform
+        # Harness Service / Environment linkage. Values come from the tenant
+        # file's `harness:` block, written by idp_request_argo_instance together
+        # with the matching GitOps Service; Harness reads these LABELS (not
+        # annotations) when the agent syncs the Application and files it under
+        # that Service. The `if` guard keeps a hand-authored tenant without the
+        # block valid - an empty label value is legal, `<no value>` is not.
+        harness.io/serviceRef: '{{ if .harness }}{{ .harness.serviceRef }}{{ end }}'
+        harness.io/envRef: '{{ if .harness }}{{ .harness.envRef }}{{ end }}'
+    spec:
+      project: default
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.argocdNamespace}}'
+      # Multi-source so `$values` resolves from the REPO ROOT: the two charts sit
+      # at different depths, and a chart-relative path would need its own ../../
+      # prefix per role and would break entirely once the charts are published to
+      # a registry.
+      sources:
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          ref: values
+        - repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
+          targetRevision: HEAD
+          path: '{{.chartPath}}'
+          helm:
+            releaseName: '{{.team}}-{{.releaseSuffix}}'
+            valueFiles:
+              - '$values/hub-clusters/local-dev/tenants/{{.team}}/values.yaml'
+      syncPolicy:
+        automated:
+          selfHeal: true
+          # NO PRUNE (decided 2026-08-03): tenant-platform creates NAMESPACES, so
+          # pruning would let a one-line values edit delete a namespace and every
+          # workload in it. Removing a namespace stays a deliberate act.
+          prune: false
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          backoff:
+            duration: 1m
+          limit: 20
