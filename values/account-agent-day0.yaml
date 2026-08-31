@@ -90,11 +90,10 @@ hubCluster:
 
 rootAppSet:
   enabled: true
-  # This repo keeps its bootstrap manifests in bootstrap/ at the repo root, not
-  # the chart default gitops/bootstrap. Read flat - the generated Application
-  # sets recurse: false, so one file per component at the top level, and
-  # anything under exclude/ is skipped.
-  path: bootstrap
+  # This Account Agent administers the EKS hub, so its generated root
+  # Application reads only that hub's desired state. Keep this binding in the
+  # per-hub values rather than making the deployment pipeline choose a path.
+  path: hub-clusters/eks-hub/bootstrap
   # Argo AppProject the root Applications are filed under. Pairs with
   # the projectMappings entry above: a Harness agent files each
   # Application under the Harness project mapped to its AppProject, so naming
