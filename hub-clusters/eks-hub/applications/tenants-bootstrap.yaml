@@ -60,7 +60,7 @@ spec:
                 # place that changes: swap `chartPath` for a chart name plus
                 # version and adjust the second source accordingly.
                 - role: platform
-                  chartPath: eks-hub/charts/tenant-platform
+                  chartPath: charts/tenant-platform
                   # Matches what this Application defaulted to before the
                   # migration (helm defaults releaseName to the Application
                   # name). tenant-platform does not stamp
