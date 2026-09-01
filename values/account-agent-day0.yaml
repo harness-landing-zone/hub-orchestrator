@@ -142,6 +142,8 @@ gitopsAgent:
       install: true
       keep: true
     configs:
+      params:
+        applicationsetcontroller.enable.progressive.syncs: "true"
       cm:
         cluster.inClusterEnabled: true
     redis:

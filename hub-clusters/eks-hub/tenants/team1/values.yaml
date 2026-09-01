@@ -92,24 +92,22 @@ harnessAgent:
     scope: PROJECT
     orgId: gitopsdemo
     projectId: selfmanagedargo
-    # Reuses the key the platform already placed in hga-system (keep: true) for
-    # the member bootstrap. The controller resolves it from
+    # Reuse the platform controller's registration credential. The controller
+    # resolves it from
     # --api-key-secret-namespace, NOT from the CR's namespace, so nothing needs
     # to exist in team1-argo.
     #
-    # NOTE this is an ORG-admin key. Safe here ONLY because the PLATFORM files
-    # this CR. If tenants are ever allowed to create their own
-    # HarnessGitopsAgent CRs, this becomes a per-tenant scoped key or the model
-    # breaks - see R2 in ../../self-managed-argo-architecture.txt.
-    apiKeySecretRef: gitopsdemo-api-key
+    # The tenant runtime never receives this API key. Harness returns a scoped
+    # Agent token, which the controller writes to tokenSecretRef below.
+    apiKeySecretRef: harness-api-key-secret
     # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
     # hard-fails otherwise. Out of step and gitops-helm creates its own Secret
     # from a blank default: the agent runs with an empty token, never connects,
     # and reports failure for entirely the wrong reason.
     tokenSecretRef: team1-argo-agent-token
   apiKeySecret:
-    # The platform's key already exists in hga-system. Creating a second copy
-    # here would put an org-admin credential inside the tenant's namespace,
+    # The controller key already exists in hga-system. Creating a second copy
+    # here would put the platform credential inside the tenant's namespace,
     # which is exactly what this model is trying to avoid.
     create: false
   # NO gitSecret, DELIBERATELY. It existed only to give this tenant's Argo read

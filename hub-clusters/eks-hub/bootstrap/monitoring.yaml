@@ -29,7 +29,7 @@ metadata:
   name: monitoring
   # The agent namespace: generated ApplicationSets must land where the
   # applicationset-controller is watching, or nothing reconciles them.
-  namespace: gitopsdemo-org-agent
+  namespace: account-gitops-agent
 spec:
   goTemplate: true
   syncPolicy:
@@ -56,7 +56,7 @@ spec:
         # The generated ApplicationSets are Argo objects, so they belong in the
         # agent namespace - NOT in the monitoring namespace. The workloads they
         # eventually create go to monitoring, set by the catalogue.
-        namespace: gitopsdemo-org-agent
+        namespace: account-gitops-agent
       source:
         repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
         # A helm chart rendered from a git path, not a helm repository. The
@@ -78,7 +78,7 @@ spec:
             # reconciles. The wrapper Application still goes Synced/Healthy,
             # because from Argo's point of view it applied the manifests it was
             # given.
-            namespace: gitopsdemo-org-agent
+            namespace: account-gitops-agent
 
             # Name PREFIX for generated ApplicationSets and Applications:
             #   <releaseName>-<cluster>-<component>-<version>

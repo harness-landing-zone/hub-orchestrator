@@ -75,6 +75,7 @@ spec:
               revision: HEAD
               files:
                 - path: hub-clusters/local-dev/tenants/*/values.yaml
+                - path: hub-clusters/local-dev/tenants/*/*/values.yaml
   # Every tenant's platform first, then the instances. Each step waits for its
   # Applications to be HEALTHY - something sync waves cannot do between
   # ApplicationSet-generated Applications, because their parent is an
@@ -128,7 +129,7 @@ spec:
           helm:
             releaseName: '{{.team}}-{{.releaseSuffix}}'
             valueFiles:
-              - '$values/hub-clusters/local-dev/tenants/{{.team}}/values.yaml'
+              - '$values/{{.path.path}}/{{.path.filename}}'
       syncPolicy:
         automated:
           selfHeal: true

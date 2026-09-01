@@ -3,7 +3,7 @@
 # Turns every hub-clusters/eks-hub/tenants/<tenant>/values.yaml into two
 # Applications - <tenant>-platform (the walls) then <tenant>-instance (the
 # tenant's own namespaced Argo + Harness agent). Adding a tenant is adding a
-# file; the IDP pipeline idp_request_argo_instance writes that file.
+# file; the IDP pipeline idp_request_gitops_instance writes that file.
 #
 # ---------------------------------------------------------------------------
 # THERE IS NO CLUSTER SELECTOR HERE, ON PURPOSE.
@@ -69,6 +69,7 @@ spec:
               revision: HEAD
               files:
                 - path: hub-clusters/eks-hub/tenants/*/values.yaml
+                - path: hub-clusters/eks-hub/tenants/*/*/values.yaml
   # Platform for every tenant first, and only then the instances. Each step
   # waits for its Applications to be HEALTHY, which sync waves cannot do between
   # ApplicationSet-generated Applications (their parent is an ApplicationSet, so
@@ -121,7 +122,7 @@ spec:
           helm:
             releaseName: '{{.team}}-{{.releaseSuffix}}'
             valueFiles:
-              - '$values/hub-clusters/eks-hub/tenants/{{.team}}/values.yaml'
+              - '$values/{{.path.path}}/{{.path.filename}}'
       syncPolicy:
         automated:
           selfHeal: true
