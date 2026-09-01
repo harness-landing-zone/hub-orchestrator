@@ -1,0 +1,93 @@
+gitopsInstance:
+  schemaVersion: 1
+  requestScope: PROJECT
+  agentScope: PROJECT
+  mode: DEDICATED
+  orgIdentifier: natwestgitopspoc
+  projectIdentifier: bddpoc
+  inventoryService:
+    name: natwestgitopspoc bddpoc GitOps Instance
+    identifier: natwestgitopspoc_bddpoc_gitops_instance
+    orgIdentifier: harness_controllers
+    projectIdentifier: hub_orchistrator
+    valuesPath: hub-clusters/eks-hub/tenants/natwestgitopspoc/bddpoc/values.yaml
+  agentNamespace: bddpoc-argo
+  agentIdentifier: bddpoc_argo_agent
+team: bddpoc
+argocdNamespace: bddpoc-argo
+workloadNamespaces:
+- bddpoc-dev
+projectName: bddpoc
+sourceRepos: []
+harness:
+  hub: eks-hub
+  envRef: hub
+  clusterRef: account.hubcluster
+  agentRef: account.hub_account_agent
+  serviceRef: natwestgitopspoc_bddpoc_gitops_instance
+namespaceLabels:
+  pod-security.kubernetes.io/enforce: baseline
+  pod-security.kubernetes.io/audit: restricted
+  pod-security.kubernetes.io/warn: restricted
+deployableKinds:
+  enabled: false
+  rules: []
+rolloutActions:
+  enabled: false
+lockDefaultProject: true
+harnessAgent:
+  enabled: true
+  metadata:
+    name: bddpoc-argo-agent
+  spec:
+    name: bddpoc-argo-agent
+    scope: PROJECT
+    orgId: natwestgitopspoc
+    apiKeySecretRef: harness-api-key-secret
+    tokenSecretRef: bddpoc-argo-agent-token
+    projectId: bddpoc
+  apiKeySecret:
+    create: false
+gitopsAgent:
+  enabled: true
+  global:
+    image:
+      tag: v3.3.10
+  harness:
+    createClusterRoles: false
+    gitopsServerHost: https://app.harness.io/prod1/gitops
+    identity:
+      accountIdentifier: qIYsos1ZQO6fJMG1Ip6KJA
+      orgIdentifier: natwestgitopspoc
+      projectIdentifier: bddpoc
+      agentIdentifier: bddpoc_argo_agent
+  agent:
+    harnessName: bddpoc-argo-agent
+    existingSecrets:
+      agentToken: bddpoc-argo-agent-token
+  argo-cd:
+    server:
+      replicas: 1
+      serviceAccount:
+        create: true
+    crds:
+      install: false
+      keep: true
+    configs:
+      params:
+        server.insecure: 'true'
+      rbac:
+        policy.csv: 'g, idp, role:readonly
+
+          '
+      cm:
+        accounts.idp: apiKey, login
+        cluster.inClusterEnabled: 'true'
+projectMappings:
+- name: bddpoc-bddpoc
+  appProject: bddpoc
+  orgId: natwestgitopspoc
+  projectId: bddpoc
+  autoCreateServiceEnv: false
+appProject:
+  enabled: false
