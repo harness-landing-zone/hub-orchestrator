@@ -92,13 +92,11 @@ harnessAgent:
     scope: PROJECT
     orgId: gitopsdemo
     projectId: selfmanagedargo
-    # Reuse the platform controller's registration credential. The controller
-    # resolves it from
-    # --api-key-secret-namespace, NOT from the CR's namespace, so nothing needs
-    # to exist in team1-argo.
-    #
-    # The tenant runtime never receives this API key. Harness returns a scoped
-    # Agent token, which the controller writes to tokenSecretRef below.
+    # A PROJECT-scoped Harness service-account key for gitopsdemo/selfmanagedargo,
+    # in a Secret of this name IN team1-argo. The controller reads keys only
+    # beside the Agent CR, and team1-argo must be in the controller's
+    # manager.managedNamespaces. The tenant runtime never receives this key;
+    # Harness returns a scoped Agent token, written to tokenSecretRef below.
     apiKeySecretRef: harness-api-key-secret
     # MUST equal gitopsAgent.agent.existingSecrets.agentToken below - the chart
     # hard-fails otherwise. Out of step and gitops-helm creates its own Secret
@@ -106,9 +104,12 @@ harnessAgent:
     # and reports failure for entirely the wrong reason.
     tokenSecretRef: team1-argo-agent-token
   apiKeySecret:
-    # The controller key already exists in hga-system. Creating a second copy
-    # here would put the platform credential inside the tenant's namespace,
-    # which is exactly what this model is trying to avoid.
+    # Created by the tenant onboarding step, NOT by this chart: this instance is
+    # applied by the platform Argo from a plain Helm source, which cannot
+    # resolve a Harness secret expression. Create it before enabling the
+    # instance, with a key from a service account scoped to this project:
+    #   kubectl -n team1-argo create secret generic harness-api-key-secret \
+    #     --from-literal=api_key=<project-scoped key>
     create: false
   # NO gitSecret, DELIBERATELY. It existed only to give this tenant's Argo read
   # access to the PRIVATE hub-orchestrator monorepo, and it carried a

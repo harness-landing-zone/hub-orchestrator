@@ -110,23 +110,27 @@ blank token.
 **ACCOUNT scope means BOTH `orgIdentifier` and `projectIdentifier` are omitted**,
 not set to `""`. The values file leaves them out entirely.
 
-## Where the API key comes from, and why it moved
+## Where the API key comes from
 
-Controller **0.4.0** created the API-key Secret itself. **0.5.0 does not** — it
-dropped that template and now only reads a Secret someone else wrote, in the
-namespace named by `manager.apiKeySecretNamespace`. The **bootstrap chart**
-creates it instead, via `harnessAgent.apiKeySecret.create`.
+The controller reads each API key from a Secret **in the Agent CR's own
+namespace**, named by `spec.apiKeySecretRef`, and only for namespaces listed in
+`manager.managedNamespaces` (`values/controller-day0.yaml`). There is no
+central key namespace and no fallback; `hga-system` holds no Harness key. The
+**bootstrap chart** creates the Secret via `harnessAgent.apiKeySecret.create`
+when Harness CD deploys the release and can resolve the secret expression.
 
-So the two charts pair like this, and neither half works alone:
+So the two charts pair like this:
 
-- `controller-day0.yaml` leaves `apiKeySecretNamespace` **empty**, meaning "look
-  in each agent CR's own namespace".
-- `account-agent-day0.yaml` sets `apiKeySecret.create: true`, which writes the
-  Secret into that same namespace.
+- `controller-day0.yaml` lists every instance namespace in
+  `manager.managedNamespaces`.
+- `account-agent-day0.yaml` and the fleet member values set
+  `apiKeySecret.create: true` with an empty `namespace`, so the key lands in
+  that release's own namespace.
+- Tenant instances applied by Argo leave `create: false`; the onboarding step
+  creates the Secret in the tenant's Argo namespace with a project-scoped key.
 
-Set `apiKeySecretNamespace: hga-system` without also arranging for something to
-create the Secret there, and the controller waits forever on a Secret nobody
-writes.
+Forget to list a namespace and every CR in it reports `NamespaceNotAllowed`
+without touching Harness.
 
 **Hardening, later:** a copy of the key per agent namespace is not ideal, since
 this credential can create agents account-wide. Centralising it in `hga-system`

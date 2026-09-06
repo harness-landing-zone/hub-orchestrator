@@ -54,11 +54,11 @@ harnessAgent:
     tokenSecretRef: gitopsdemo-org-agent-token
   apiKeySecret:
     create: true
-    # hga-system, NOT this release namespace: controller chart 0.8.0 resolves
-    # an empty apiKeySecretNamespace to its OWN namespace. Keeping the key
-    # there also means it survives deletion of the agent namespace, which the
-    # finalizer needs to deregister the agent.
-    namespace: hga-system
+    # Empty = this release namespace (gitopsdemo-org-agent). The controller
+    # reads the key only beside the Agent CR, and that namespace must be in
+    # manager.managedNamespaces. Delete the Agent CR before the namespace so
+    # the finalizer still has the key to deregister the agent.
+    namespace: ""
     value: "<+secrets.getValue('gitops-demo-admin')>"
     keep: true
   # Registers this monorepo in THIS member's own Argo CD, so the spoke can pull

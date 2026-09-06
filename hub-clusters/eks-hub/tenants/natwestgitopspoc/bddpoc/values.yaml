@@ -47,6 +47,9 @@ harnessAgent:
     tokenSecretRef: bddpoc-argo-agent-token
     projectId: bddpoc
   apiKeySecret:
+    # Created by the tenant onboarding step in bddpoc-argo with a key scoped to
+    # natwestgitopspoc/bddpoc. The controller reads keys only beside the Agent
+    # CR, and bddpoc-argo must be in the controller's manager.managedNamespaces.
     create: false
 gitopsAgent:
   enabled: true

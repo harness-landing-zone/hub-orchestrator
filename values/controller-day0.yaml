@@ -20,13 +20,19 @@ crds:
   keep: true
 
 manager:
-  # Empty resolves to THIS release's namespace under chart 0.8.0 — the
-  # centralized topology. The bootstrap chart renders the API-key Secret here
-  # (harnessAgent.apiKeySecret.namespace in account-agent-day0.yaml), which
-  # keeps the finalizer's cleanup credential alive even while an agent
-  # namespace is being deleted. This flipped in 0.8.0: 0.7.0 resolved empty
-  # to each agent CR's own namespace instead.
-  apiKeySecretNamespace: ""
+  # The controller manages Agent and Mapping CRs ONLY in these namespaces and
+  # reads each API-key Secret from the CR's own namespace. hga-system holds no
+  # Harness key. Onboarding an instance namespace means adding it here and
+  # redeploying the controller; a CR anywhere else reports NamespaceNotAllowed
+  # and never reaches Harness.
+  managedNamespaces:
+    - hub-account-agent
+    - account-agent
+    - gitopsdemo-org-agent
+    - team1-argo
+    - bddpoc-argo
+  # Harness API gateway, pinned so the pod environment cannot redirect it.
+  harnessEndpoint: https://app.harness.io/gateway
 
   # JSON logs rather than controller-runtime's development mode.
   zapDevelopment: false

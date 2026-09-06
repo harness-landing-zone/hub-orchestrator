@@ -22,19 +22,17 @@ harnessAgent:
     scope: <+serviceVariables.agent_scope>
     tokenSecretRef: <+serviceVariables.token_secret>
   apiKeySecret:
-    # THIS chart creates the Secret now. Controller chart 0.5.0 dropped the
-    # apikey-secret template that 0.4.0 had, so the bootstrap chart is the only
-    # thing that writes it — and it writes it into this release's namespace,
-    # which is where the controller looks when apiKeySecretNamespace is empty.
+    # THIS chart creates the Secret. The controller reads the API key only from
+    # the Agent CR's own namespace, so it is rendered into this release
+    # namespace, which must also be listed in the controller's
+    # manager.managedNamespaces (values/controller-day0.yaml).
     #
     # The Secret is named by harnessAgent.spec.apiKeySecretRef
     # (harness-api-key-secret by default), so there is no name field here.
     create: true
-    # Controller chart 0.8.0 reads the key from the CONTROLLER release
-    # namespace when apiKeySecretNamespace is empty, so render it there.
-    # This also keeps the finalizer's cleanup credential alive while the
-    # agent namespace itself is being deleted.
-    namespace: hga-system
+    # Empty = this release namespace. Never point this at hga-system: the
+    # controller does not read keys from its own namespace any more.
+    namespace: ""
     # Resolved by Harness at deploy time and written only to the Kubernetes
     # Secret's stringData. The plaintext key never reaches git.
     value: '<+secrets.getValue("hub_orchistrator_token")>'
