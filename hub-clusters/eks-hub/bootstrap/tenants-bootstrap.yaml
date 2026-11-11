@@ -68,8 +68,8 @@ spec:
               repoURL: https://github.com/harness-landing-zone/hub-orchestrator.git
               revision: HEAD
               files:
-                - path: hub-clusters/eks-hub/tenants/*/values.yaml
-                - path: hub-clusters/eks-hub/tenants/*/*/values.yaml
+                - path: hub-clusters/eks-hub/tenants-old/*/values.yaml
+                - path: hub-clusters/eks-hub/tenants-old/*/*/values.yaml
   # Platform for every tenant first, and only then the instances. Each step
   # waits for its Applications to be HEALTHY, which sync waves cannot do between
   # ApplicationSet-generated Applications (their parent is an ApplicationSet, so
